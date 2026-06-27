@@ -222,17 +222,7 @@ LUCIDE_DUMBBELL = '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18
 LUCIDE_SPARKLES = '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide-icon-active" style="margin-right:8px;"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>'
 LUCIDE_ALERT_TRIANGLE = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide-icon-active" style="margin-right:8px;"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" x2="12" y1="9" y2="13"/><line x1="12" x2="12.01" y1="17" y2="17"/></svg>'
 
-# ---------- SIDEBAR COMPOSITION FORM ----------
-st.sidebar.markdown("<h3 style='font-size: 1.125rem; font-weight: 700; letter-spacing: -0.02em;'>Log Metrics</h3>", unsafe_allow_html=True)
-with st.sidebar.form("body_comp_form", clear_on_submit=True):
-    weight_input = st.number_input("Weight (kg)", 30.0, 200.0, 75.0, 0.1)
-    fat_input = st.number_input("Body Fat (%)", 2.0, 50.0, 15.0, 0.1)
-    waist_input = st.number_input("Waist (cm)", 40.0, 150.0, 80.0, 0.5)
-    submit_comp = st.form_submit_button("Save Entry")
-    if submit_comp:
-        db.save_body_comp(date.today().strftime("%Y-%m-%d"), weight_input, fat_input, waist_input)
-        st.sidebar.success("Saved successfully!")
-        st.rerun()
+
 
 # ---------- INITIAL LOADING SCREEN ----------
 loader = st.empty()
@@ -741,36 +731,61 @@ with tab_trends:
 with tab_comp:
     st.markdown("<h3 style='font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 16px;'>Body Composition Tracking</h3>", unsafe_allow_html=True)
     
+    col_input, col_chart = st.columns([4, 8])
+    
+    with col_input:
+        st.markdown("<div style='font-size: 0.875rem; font-weight: 600; margin-bottom: 8px;'>Log New Entry</div>", unsafe_allow_html=True)
+        with st.form("body_comp_form", clear_on_submit=True):
+            weight_input = st.number_input("Weight (kg)", 30.0, 200.0, 75.0, 0.1)
+            fat_input = st.number_input("Body Fat (%)", 2.0, 50.0, 15.0, 0.1)
+            waist_input = st.number_input("Waist (cm)", 40.0, 150.0, 80.0, 0.5)
+            submit_comp = st.form_submit_button("Save Entry")
+            if submit_comp:
+                db.save_body_comp(date.today().strftime("%Y-%m-%d"), weight_input, fat_input, waist_input)
+                st.success("Saved successfully!")
+                st.rerun()
+                
     comp_df = db.get_body_comp_df(limit=30)
-    if not comp_df.empty:
-        fig_comp = go.Figure()
-        fig_comp.add_trace(go.Scatter(
-            x=comp_df["date"], y=comp_df["weight"],
-            mode="lines+markers", name="Weight (kg)",
-            line=dict(color="#2563eb", width=2),
-            marker=dict(size=4)
-        ))
-        if "body_fat" in comp_df.columns and comp_df["body_fat"].notna().any():
+    
+    with col_chart:
+        if not comp_df.empty:
+            fig_comp = go.Figure()
             fig_comp.add_trace(go.Scatter(
-                x=comp_df["date"], y=comp_df["body_fat"],
-                mode="lines+markers", name="Body Fat (%)",
-                line=dict(color="#db2777", width=2),
-                marker=dict(size=4),
-                yaxis="y2"
+                x=comp_df["date"], y=comp_df["weight"],
+                mode="lines+markers", name="Weight (kg)",
+                line=dict(color="#2563eb", width=2),
+                marker=dict(size=4)
             ))
-        fig_comp.update_layout(
-            template=plotly_template,
-            hovermode="x unified",
-            yaxis=dict(title="Weight (kg)", side="left", gridcolor=grid_color),
-            yaxis2=dict(title="Body Fat (%)", overlaying="y", side="right", showgrid=False),
-            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-            height=320,
-            margin=dict(l=40, r=40, t=10, b=30),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-        )
-        st.plotly_chart(fig_comp, use_container_width=True)
-        
-        # Display body comp logs in a table
+            if "body_fat" in comp_df.columns and comp_df["body_fat"].notna().any():
+                fig_comp.add_trace(go.Scatter(
+                    x=comp_df["date"], y=comp_df["body_fat"],
+                    mode="lines+markers", name="Body Fat (%)",
+                    line=dict(color="#db2777", width=2),
+                    marker=dict(size=4),
+                    yaxis="y2"
+                ))
+            fig_comp.update_layout(
+                template=plotly_template,
+                hovermode="x unified",
+                yaxis=dict(title="Weight (kg)", side="left", gridcolor=grid_color),
+                yaxis2=dict(title="Body Fat (%)", overlaying="y", side="right", showgrid=False),
+                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                height=320,
+                margin=dict(l=40, r=40, t=10, b=30),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            )
+            st.plotly_chart(fig_comp, use_container_width=True)
+        else:
+            st.markdown("""
+            <div class="shadcn-card" style="padding: 24px; height: 320px; display: flex; justify-content: center; align-items: center; flex-direction: column;">
+                <div style="font-weight: 600; font-size: 0.875rem;">No Data to Display</div>
+                <p style="font-size: 0.875rem; color: var(--muted-foreground); margin-top: 4px; text-align: center;">
+                    Log your daily weight and body fat % to generate composition trend lines.
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+    if not comp_df.empty:
         st.markdown("<h4 style='font-size: 1rem; font-weight: 700; letter-spacing: -0.01em; margin-top: 24px; margin-bottom: 12px;'>Logged Entries</h4>", unsafe_allow_html=True)
         styled_df = comp_df[["date", "weight", "body_fat", "waist"]].rename(columns={
             "date": "Date",
@@ -779,15 +794,6 @@ with tab_comp:
             "waist": "Waist (cm)"
         }).sort_values(by="Date", ascending=False)
         st.dataframe(styled_df, hide_index=True, use_container_width=True)
-    else:
-        st.markdown("""
-        <div class="shadcn-card" style="padding: 24px;">
-            <div style="font-weight: 600; font-size: 0.875rem;">No Entries Logged Yet</div>
-            <p style="font-size: 0.875rem; color: var(--muted-foreground); margin-top: 4px;">
-                Log your weight, body fat %, and waist size in the sidebar to start tracking composition trends.
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
 
 # ==================== TAB 4: AI INSIGHTS ====================
 with tab_ai:
