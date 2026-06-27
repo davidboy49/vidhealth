@@ -83,6 +83,58 @@ st.markdown(f"""
         border-color: var(--border) !important;
     }}
 
+    /* Clean up headers and top margin dark colors */
+    header[data-testid="stHeader"] {{
+        background-color: var(--background) !important;
+        border-bottom: 1px solid var(--border) !important;
+    }}
+    
+    div[data-testid="stDecoration"] {{
+        background-image: none !important;
+        background-color: var(--border) !important;
+    }}
+    
+    div.block-container {{
+        padding-top: 1.5rem !important;
+        background-color: var(--background) !important;
+    }}
+    
+    div[data-testid="stToolbar"] {{
+        color: var(--foreground) !important;
+    }}
+
+    #MainMenu {{visibility: hidden;}}
+    footer {{visibility: hidden;}}
+
+    /* Loading overlay */
+    .loader-overlay {{
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        background-color: var(--background);
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        z-index: 999999;
+        gap: 16px;
+    }}
+    .loader-spinner {{
+        width: 40px;
+        height: 40px;
+        border: 3px solid var(--border);
+        border-top: 3px solid var(--foreground);
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+    }}
+    @keyframes spin {{
+        0% {{ transform: rotate(0deg); }}
+        100% {{ transform: rotate(360deg); }}
+    }}
+
+
     /* Shadcn Card Component */
     .shadcn-card {{
         background-color: var(--card);
@@ -228,17 +280,12 @@ LUCIDE_ALERT_TRIANGLE = '<svg xmlns="http://www.w3.org/2000/svg" width="16" heig
 loader = st.empty()
 with loader.container():
     st.markdown("""
-    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 80vh; gap: 16px;">
-        <div style="width: 40px; height: 40px; border: 3px solid var(--border); border-top: 3px solid var(--foreground); border-radius: 50%; animation: spin 1s linear infinite;"></div>
+    <div class="loader-overlay">
+        <div class="loader-spinner"></div>
         <div style="font-size: 0.875rem; font-weight: 500; color: var(--muted-foreground); letter-spacing: 0.05em; text-transform: uppercase;">Loading biometrics...</div>
     </div>
-    <style>
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-    </style>
     """, unsafe_allow_html=True)
+
 
 # ---------- DATA LOADING ----------
 df = db.get_df(limit=30)
