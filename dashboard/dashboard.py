@@ -13,8 +13,9 @@ from recovery_predictor import RecoveryPredictor
 st.set_page_config(page_title="Hermes Health", page_icon="⚡", layout="wide")
 
 # ---------- THEME CONFIGURATION (SHADCN STYLING) ----------
+# FIRST PRIORITY: Default to Light mode
 if "theme" not in st.session_state:
-    st.session_state.theme = "dark"
+    st.session_state.theme = "light"
 
 # Header Row
 cols_header = st.columns([9, 1])
@@ -43,7 +44,7 @@ if st.session_state.theme == "dark":
     plotly_template = "plotly_dark"
     grid_color = "#27272a"
 else:
-    # Zinc Light Palette
+    # Zinc Light Palette (Default First Priority)
     bg_base = "#ffffff"            # white
     bg_card = "#ffffff"            # white
     text_primary = "#09090b"       # zinc-950
@@ -88,7 +89,7 @@ st.markdown(f"""
         color: var(--card-foreground);
         border-radius: 8px;
         border: 1px solid var(--border);
-        padding: 24px;
+        padding: 24px 24px 12px 24px;
         box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
         display: flex;
         flex-direction: column;
@@ -118,6 +119,7 @@ st.markdown(f"""
     .shadcn-card-description {{
         font-size: 0.75rem;
         color: var(--muted-foreground);
+        margin-bottom: 8px;
     }}
 
     /* Shadcn Callout / Alert Component */
@@ -220,6 +222,18 @@ LUCIDE_DUMBBELL = '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18
 LUCIDE_SPARKLES = '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide-icon-active" style="margin-right:8px;"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>'
 LUCIDE_ALERT_TRIANGLE = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide-icon-active" style="margin-right:8px;"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" x2="12" y1="9" y2="13"/><line x1="12" x2="12.01" y1="17" y2="17"/></svg>'
 
+# ---------- SIDEBAR COMPOSITION FORM ----------
+st.sidebar.markdown("<h3 style='font-size: 1.125rem; font-weight: 700; letter-spacing: -0.02em;'>Log Metrics</h3>", unsafe_allow_html=True)
+with st.sidebar.form("body_comp_form", clear_on_submit=True):
+    weight_input = st.number_input("Weight (kg)", 30.0, 200.0, 75.0, 0.1)
+    fat_input = st.number_input("Body Fat (%)", 2.0, 50.0, 15.0, 0.1)
+    waist_input = st.number_input("Waist (cm)", 40.0, 150.0, 80.0, 0.5)
+    submit_comp = st.form_submit_button("Save Entry")
+    if submit_comp:
+        db.save_body_comp(date.today().strftime("%Y-%m-%d"), weight_input, fat_input, waist_input)
+        st.sidebar.success("Saved successfully!")
+        st.rerun()
+
 # ---------- INITIAL LOADING SCREEN ----------
 loader = st.empty()
 with loader.container():
@@ -250,6 +264,26 @@ latest_date = latest_df["date"]
 
 # Clear initial loading screen once data is successfully parsed
 loader.empty()
+
+# ---------- SPARKLINE PLOTTER HELPER ----------
+def make_sparkline(series, color):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=list(range(len(series))), y=series,
+        mode="lines",
+        line=dict(color=color, width=2),
+        hoverinfo="none"
+    ))
+    fig.update_layout(
+        template=None,
+        xaxis=dict(visible=False),
+        yaxis=dict(visible=False),
+        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+        margin=dict(l=0, r=0, t=0, b=0),
+        height=30,
+        showlegend=False
+    )
+    return fig
 
 # ---------- TABS (EMOJI-LESS PLAIN TEXT HEADERS) ----------
 tab_today, tab_trends, tab_ai, tab_recovery = st.tabs([
@@ -284,7 +318,7 @@ with tab_today:
         </div>
         """, unsafe_allow_html=True)
 
-    # 5-Column Grid Layout for Biometric Cards (using Lucide SVGs instead of emojis)
+    # 5-Column Grid Layout for Biometric Cards with 7-Day Sparkline trends below them
     col1, col2, col3, col4, col5 = st.columns(5)
     
     with col1:
@@ -299,6 +333,10 @@ with tab_today:
             <div class="shadcn-card-description">last night (ms)</div>
         </div>
         """, unsafe_allow_html=True)
+        # 7-day sparkline
+        hrv_series = df["hrv_last_night"].tail(7).fillna(method="bfill").fillna(method="ffill").tolist()
+        if len(hrv_series) > 1:
+            st.plotly_chart(make_sparkline(hrv_series, "#6366f1"), config={'displayModeBar': False}, use_container_width=True)
 
     with col2:
         sleep_val = latest_df.get("sleep_score")
@@ -312,6 +350,10 @@ with tab_today:
             <div class="shadcn-card-description">quality score /100</div>
         </div>
         """, unsafe_allow_html=True)
+        # 7-day sparkline
+        sleep_series = df["sleep_score"].tail(7).fillna(method="bfill").fillna(method="ffill").tolist()
+        if len(sleep_series) > 1:
+            st.plotly_chart(make_sparkline(sleep_series, "#8b5cf6"), config={'displayModeBar': False}, use_container_width=True)
 
     with col3:
         hr_val = latest_df.get("resting_hr")
@@ -325,6 +367,10 @@ with tab_today:
             <div class="shadcn-card-description">beats per min (bpm)</div>
         </div>
         """, unsafe_allow_html=True)
+        # 7-day sparkline
+        hrv_avg_series = df["resting_hr"].tail(7).fillna(method="bfill").fillna(method="ffill").tolist()
+        if len(hrv_avg_series) > 1:
+            st.plotly_chart(make_sparkline(hrv_avg_series, "#ef4444"), config={'displayModeBar': False}, use_container_width=True)
 
     with col4:
         stress_val = latest_df.get("stress_avg")
@@ -338,6 +384,10 @@ with tab_today:
             <div class="shadcn-card-description">daily average /100</div>
         </div>
         """, unsafe_allow_html=True)
+        # 7-day sparkline
+        stress_series = df["stress_avg"].tail(7).fillna(method="bfill").fillna(method="ffill").tolist()
+        if len(stress_series) > 1:
+            st.plotly_chart(make_sparkline(stress_series, "#f59e0b"), config={'displayModeBar': False}, use_container_width=True)
 
     with col5:
         bb_val = latest_df.get("bb_min")
@@ -351,6 +401,10 @@ with tab_today:
             <div class="shadcn-card-description">lowest level today</div>
         </div>
         """, unsafe_allow_html=True)
+        # 7-day sparkline
+        bb_series = df["bb_min"].tail(7).fillna(method="bfill").fillna(method="ffill").tolist()
+        if len(bb_series) > 1:
+            st.plotly_chart(make_sparkline(bb_series, "#10b981"), config={'displayModeBar': False}, use_container_width=True)
 
     st.markdown("<div style='margin-bottom: 24px;'></div>", unsafe_allow_html=True)
 
@@ -453,6 +507,37 @@ with tab_today:
         </div>
         """, unsafe_allow_html=True)
 
+        st.markdown("<div style='margin-bottom: 16px;'></div>", unsafe_allow_html=True)
+
+        # Weekly Strain vs Recovery Balance progress bar
+        weekly_stress = df["stress_avg"].tail(7).mean() or 30
+        weekly_sleep = df["sleep_score"].tail(7).mean() or 75
+        weekly_hrv_avg = df["hrv_last_night"].tail(7).mean() or 55
+        weekly_readiness = df["training_readiness"].tail(7).mean() or 60
+        
+        strain_score = weekly_stress * 0.6 + (100 - weekly_sleep) * 0.4
+        target_hrv = latest_df.get("hrv_weekly_avg") or 60
+        hrv_ratio = min(1.2, hrv_val / target_hrv) if hrv_val and target_hrv else 1.0
+        recovery_score = weekly_readiness * 0.6 + (hrv_ratio * 40)
+        
+        tot = strain_score + recovery_score
+        strain_pct = (strain_score / tot) * 100 if tot > 0 else 50
+        rec_pct = 100 - strain_pct
+
+        st.markdown(f"""
+        <div class="shadcn-card" style="padding: 18px; border-left: 4px solid var(--border);">
+            <div style="font-size: 0.75rem; color: var(--muted-foreground); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 8px;">Weekly Strain vs Recovery Balance</div>
+            <div style="display: flex; height: 10px; border-radius: 5px; overflow: hidden; background-color: var(--muted); border: 1px solid var(--border);">
+                <div style="width: {rec_pct:.1f}%; background-color: #10b981;"></div>
+                <div style="width: {strain_pct:.1f}%; background-color: #ef4444;"></div>
+            </div>
+            <div style="display: flex; justify-content: space-between; font-size: 0.75rem; margin-top: 6px; font-weight: 500;">
+                <span style="color: #10b981;">Recovery ({rec_pct:.0f}%)</span>
+                <span style="color: #ef4444;">Strain ({strain_pct:.0f}%)</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
 # ==================== TAB 2: TREND ANALYSIS ====================
 with tab_trends:
     st.markdown("<h3 style='font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 16px;'>Biometric Trends (30 Days)</h3>", unsafe_allow_html=True)
@@ -481,13 +566,38 @@ with tab_trends:
             yaxis=dict(title="HRV (ms)", side="left", gridcolor=grid_color),
             yaxis2=dict(title="Resting HR (bpm)", overlaying="y", side="right", showgrid=False),
             plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-            height=350,
+            height=300,
             margin=dict(l=40, r=40, t=10, b=30),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
         )
         st.plotly_chart(fig_hr, use_container_width=True)
 
-        # Chart 2: Stress vs Body Battery
+        # Chart 2: Sleep Architecture Breakdown (Stacked Bar)
+        if "sleep_deep" in df.columns and df["sleep_deep"].notna().any():
+            fig_sleep_arch = go.Figure()
+            deep_hrs = df["sleep_deep"] / 3600.0
+            rem_hrs = df["sleep_rem"] / 3600.0
+            light_hrs = df["sleep_light"] / 3600.0
+            awake_hrs = df["sleep_awake"] / 3600.0
+            
+            fig_sleep_arch.add_trace(go.Bar(x=df["date"], y=deep_hrs, name="Deep Sleep", marker_color="#1e1b4b"))
+            fig_sleep_arch.add_trace(go.Bar(x=df["date"], y=rem_hrs, name="REM Sleep", marker_color="#4f46e5"))
+            fig_sleep_arch.add_trace(go.Bar(x=df["date"], y=light_hrs, name="Light Sleep", marker_color="#818cf8"))
+            fig_sleep_arch.add_trace(go.Bar(x=df["date"], y=awake_hrs, name="Awake Time", marker_color="#e4e4e7"))
+            
+            fig_sleep_arch.update_layout(
+                template=plotly_template,
+                barmode="stack",
+                title="Overnight Sleep Architecture Breakdown",
+                yaxis=dict(title="Duration (Hours)", gridcolor=grid_color),
+                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                height=300,
+                margin=dict(l=40, r=40, t=40, b=30),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            )
+            st.plotly_chart(fig_sleep_arch, use_container_width=True)
+
+        # Chart 3: Stress vs Body Battery
         fig_stress = go.Figure()
         if "stress_avg" in df.columns and df["stress_avg"].notna().any():
             fig_stress.add_trace(go.Scatter(
@@ -508,7 +618,7 @@ with tab_trends:
             hovermode="x unified",
             yaxis=dict(title="Score (0-100)", side="left", range=[0, 100], gridcolor=grid_color),
             plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-            height=350,
+            height=300,
             margin=dict(l=40, r=40, t=10, b=30),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
         )
@@ -577,11 +687,79 @@ with tab_trends:
                 yaxis=dict(title="SpO2 (%)", side="left", range=[80, 100], gridcolor=grid_color),
                 yaxis2=dict(title="Breaths/min", overlaying="y", side="right", range=[10, 25], showgrid=False),
                 plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                height=300,
+                height=280,
                 margin=dict(l=40, r=40, t=40, b=30),
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
             )
             st.plotly_chart(fig_spo2, use_container_width=True)
+
+        # Render Body Composition trends if data exists
+        comp_df = db.get_body_comp_df(limit=30)
+        if not comp_df.empty:
+            fig_comp = go.Figure()
+            fig_comp.add_trace(go.Scatter(
+                x=comp_df["date"], y=comp_df["weight"],
+                mode="lines+markers", name="Weight (kg)",
+                line=dict(color="#2563eb", width=2),
+                marker=dict(size=4)
+            ))
+            if "body_fat" in comp_df.columns and comp_df["body_fat"].notna().any():
+                fig_comp.add_trace(go.Scatter(
+                    x=comp_df["date"], y=comp_df["body_fat"],
+                    mode="lines+markers", name="Body Fat (%)",
+                    line=dict(color="#db2777", width=2),
+                    marker=dict(size=4),
+                    yaxis="y2"
+                ))
+            fig_comp.update_layout(
+                template=plotly_template,
+                title="Body Composition Tracking",
+                hovermode="x unified",
+                yaxis=dict(title="Weight (kg)", side="left", gridcolor=grid_color),
+                yaxis2=dict(title="Body Fat (%)", overlaying="y", side="right", showgrid=False),
+                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                height=280,
+                margin=dict(l=40, r=40, t=40, b=30),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            )
+            st.plotly_chart(fig_comp, use_container_width=True)
+
+        # Automated Correlation Discovery Panel
+        st.markdown("<h3 style='font-size: 1.125rem; font-weight: 700; letter-spacing: -0.02em; margin-top: 24px; margin-bottom: 12px;'>Biometric Correlation Insights</h3>", unsafe_allow_html=True)
+        
+        # Pearson correlations calculator
+        cols = ["hrv_last_night", "sleep_score", "resting_hr", "stress_avg", "steps", "training_readiness"]
+        available_cols = [c for c in cols if c in df.columns and df[c].notna().sum() > 5]
+        
+        insights = []
+        if len(available_cols) >= 2:
+            corr_matrix = df[available_cols].corr()
+            
+            if "hrv_last_night" in corr_matrix.index and "stress_avg" in corr_matrix.columns:
+                val = corr_matrix.loc["hrv_last_night", "stress_avg"]
+                if val < -0.35:
+                    insights.append(f"Daytime stress averages and sleep recovery (HRV) are negatively correlated ({val:.2f}). Higher stress directly suppresses your sleep recovery.")
+            if "hrv_last_night" in corr_matrix.index and "sleep_score" in corr_matrix.columns:
+                val = corr_matrix.loc["hrv_last_night", "sleep_score"]
+                if val > 0.35:
+                    insights.append(f"Sleep score and overnight HRV show a positive correlation ({val:.2f}). Deep quality sleep directly charges autonomic recovery.")
+            if "resting_hr" in corr_matrix.index and "hrv_last_night" in corr_matrix.columns:
+                val = corr_matrix.loc["resting_hr", "hrv_last_night"]
+                if val < -0.4:
+                    insights.append(f"Resting HR and HRV are strongly inversely linked ({val:.2f}). A lower waking heart rate signifies peak parasympathetic recovery.")
+            if "steps" in corr_matrix.index and "sleep_score" in corr_matrix.columns:
+                val = corr_matrix.loc["steps", "sleep_score"]
+                if val > 0.25:
+                    insights.append(f"Higher daily step counts show a positive relationship ({val:.2f}) with sleep quality score. Physical output helps you sleep deeper.")
+        
+        if not insights:
+            insights.append("Still gathering data to discover correlation insights. Keep logging consistency.")
+            
+        st.markdown(f"""
+        <div class="shadcn-card" style="padding: 20px; gap: 8px; border-left: 4px solid var(--border);">
+            {"".join(f"<div style='font-size: 0.875rem; line-height: 1.5; padding: 4px 0;'>• {ins}</div>" for ins in insights)}
+        </div>
+        """, unsafe_allow_html=True)
 
     else:
         st.info("Accumulating data. Wear watch consistently to show trend charts.")

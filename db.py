@@ -44,6 +44,14 @@ def init_db():
         raw_json TEXT
     )
     """)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS body_comp (
+        date TEXT PRIMARY KEY,
+        weight REAL,
+        body_fat REAL,
+        waist REAL
+    )
+    """)
     conn.commit()
     conn.close()
 
@@ -213,6 +221,39 @@ def update_custom_field(date_str: str, field_name: str, value):
     cursor.execute(f"UPDATE daily_metrics SET {field_name} = ? WHERE date = ?", (value, date_str))
     conn.commit()
     conn.close()
+
+def save_body_comp(date_str: str, weight: float, body_fat: float, waist: float):
+    """
+    Saves or updates manual body composition measurements.
+    """
+    init_db()
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+    INSERT INTO body_comp (date, weight, body_fat, waist)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(date) DO UPDATE SET
+        weight = excluded.weight,
+        body_fat = excluded.body_fat,
+        waist = excluded.waist
+    """, (date_str, weight, body_fat, waist))
+    conn.commit()
+    conn.close()
+
+def get_body_comp_df(limit: int = 30):
+    """
+    Loads body composition metrics as a pandas DataFrame.
+    """
+    import pandas as pd
+    init_db()
+    conn = get_connection()
+    df = pd.read_sql_query(f"""
+        SELECT * FROM body_comp 
+        ORDER BY date ASC 
+        LIMIT {limit}
+    """, conn)
+    conn.close()
+    return df
 
 if __name__ == "__main__":
     init_db()

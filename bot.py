@@ -268,24 +268,18 @@ async def send_daily_push():
         return
         
     latest = df.iloc[-1]
-    sleep_duration_hrs = (latest["sleep_duration"] / 3600.0) if latest["sleep_duration"] else 0
-    readiness = latest["training_readiness"] or 50
+    
+    # Generate narrative morning briefing using Gemini
+    import ai_coach
+    try:
+        briefing = ai_coach.generate_morning_briefing(days=3)
+    except Exception as e:
+        briefing = f"Could not generate AI briefing: {e}"
     
     msg = (
         f"🔔 **Hermes Morning Report: {latest['date']}**\n\n"
-        f"🏃 **Readiness:** {latest['training_readiness'] or '—'}/100\n"
-        f"💙 **HRV Last Night:** {latest['hrv_last_night'] or '—'} ms (Avg: {latest['hrv_weekly_avg'] or '—'} ms)\n"
-        f"😴 **Sleep Score:** {latest['sleep_score'] or '—'}/100 ({sleep_duration_hrs:.1f} hrs)\n"
-        f"💤 **Resting HR:** {latest['resting_hr'] or '—'} bpm\n"
-        f"⚡ **Body Battery:** Low today: {latest['bb_min'] or '—'}\n\n"
+        f"{briefing}\n"
     )
-    
-    if readiness >= 80:
-        msg += "⚡ **Optimal Condition**: Clear for full intensity compound lifts today."
-    elif readiness >= 50:
-        msg += "🏋️ **Moderate Condition**: Focus on standard hypertrophy volume."
-    else:
-        msg += "🛑 **Low Condition**: DELOAD or REST day recommended. Focus on active recovery."
         
     # Send message using Application
     app = Application.builder().token(BOT_TOKEN).build()

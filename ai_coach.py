@@ -87,6 +87,57 @@ Make the tone encouraging, technical, and precise. Mention specific numbers (lik
     
     return report_text
 
+def generate_morning_briefing(days: int = 3) -> str:
+    """
+    Generates a concise, 3-sentence daily coach briefing for the Telegram push.
+    """
+    if not HAS_GENAI:
+        raise ImportError(
+            "The 'google-generativeai' package is not installed in this Python environment. "
+            "Please run 'pip install -r requirements.txt' on your server."
+        )
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY environment variable not found in .env")
+        
+    df = db.get_df(limit=days)
+    if df.empty:
+        return "No data in database to generate briefing."
+        
+    latest_row = df.iloc[-1]
+    
+    data_summary = []
+    for _, row in df.iterrows():
+        day_info = (
+            f"Date: {row['date']}\n"
+            f"  HRV: {row['hrv_last_night']} ms (Weekly Avg: {row['hrv_weekly_avg']} ms)\n"
+            f"  Sleep Score: {row['sleep_score']}/100\n"
+            f"  Resting HR: {row['resting_hr']} bpm\n"
+            f"  Stress Level: Avg: {row['stress_avg']}/100\n"
+            f"  Training Readiness: {row['training_readiness']}/100\n"
+            f"--------------------------------------------------"
+        )
+        data_summary.append(day_info)
+        
+    metrics_block = "\n".join(data_summary)
+    
+    prompt = f"""
+You are a highly qualified sports science coach. Analyze the user's recent biometrics:
+
+{metrics_block}
+
+Please write a concise daily morning brief.
+- Tone should be like a personal text message from a smart coach.
+- Exactly 3 sentences.
+- First sentence: Summarize their physical readiness state today using specific numbers (like HRV or sleep score).
+- Second sentence: Analyze their recovery trend over the last 3 days (e.g. recovering, accumulating stress).
+- Third sentence: Provide one concrete, actionable instruction for today's training (e.g. 'Push hard on squats today', 'Stick to a light Zone 2 cardio session', 'Take a complete rest day').
+- No headers, no markdown bold symbols (*), just 3 clean sentences.
+"""
+
+    model = genai.GenerativeModel("gemini-2.5-flash")
+    response = model.generate_content(prompt)
+    return response.text.strip()
+
 if __name__ == "__main__":
     print("Generating report using Gemini...")
     try:
