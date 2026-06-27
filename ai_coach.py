@@ -1,7 +1,12 @@
 import os
 from pathlib import Path
 from datetime import date
-import google.generativeai as genai
+HAS_GENAI = True
+try:
+    import google.generativeai as genai
+except ImportError:
+    HAS_GENAI = False
+
 from dotenv import load_dotenv
 
 # Load env variables
@@ -11,7 +16,7 @@ import db
 
 # Configure Gemini
 api_key = os.environ.get("GEMINI_API_KEY")
-if api_key:
+if api_key and HAS_GENAI:
     genai.configure(api_key=api_key)
 
 def generate_weekly_report(days: int = 7) -> str:
@@ -19,6 +24,11 @@ def generate_weekly_report(days: int = 7) -> str:
     Fetches the last N days of data from the database, sends it to Gemini,
     generates a health report, saves it in the database for the latest day, and returns it.
     """
+    if not HAS_GENAI:
+        raise ImportError(
+            "The 'google-generativeai' package is not installed in this Python environment. "
+            "Please run 'pip install -r requirements.txt' on your server."
+        )
     if not api_key:
         raise ValueError("GEMINI_API_KEY environment variable not found in .env")
         

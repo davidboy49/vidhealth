@@ -220,16 +220,36 @@ LUCIDE_DUMBBELL = '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18
 LUCIDE_SPARKLES = '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide-icon-active" style="margin-right:8px;"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>'
 LUCIDE_ALERT_TRIANGLE = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide-icon-active" style="margin-right:8px;"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" x2="12" y1="9" y2="13"/><line x1="12" x2="12.01" y1="17" y2="17"/></svg>'
 
+# ---------- INITIAL LOADING SCREEN ----------
+loader = st.empty()
+with loader.container():
+    st.markdown("""
+    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 80vh; gap: 16px;">
+        <div style="width: 40px; height: 40px; border: 3px solid var(--border); border-top: 3px solid var(--foreground); border-radius: 50%; animation: spin 1s linear infinite;"></div>
+        <div style="font-size: 0.875rem; font-weight: 500; color: var(--muted-foreground); letter-spacing: 0.05em; text-transform: uppercase;">Loading biometrics...</div>
+    </div>
+    <style>
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+    """, unsafe_allow_html=True)
+
 # ---------- DATA LOADING ----------
 df = db.get_df(limit=30)
 
 if df.empty:
+    loader.empty()
     st.info("No health data synced yet. Run `python sync.py backfill 14` to fetch data.")
     st.stop()
 
 # Ensure chronological order and get latest row
 latest_df = df.iloc[-1]
 latest_date = latest_df["date"]
+
+# Clear initial loading screen once data is successfully parsed
+loader.empty()
 
 # ---------- TABS (EMOJI-LESS PLAIN TEXT HEADERS) ----------
 tab_today, tab_trends, tab_ai, tab_recovery = st.tabs([
