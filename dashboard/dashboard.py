@@ -334,7 +334,7 @@ with tab_today:
         </div>
         """, unsafe_allow_html=True)
         # 7-day sparkline
-        hrv_series = df["hrv_last_night"].tail(7).fillna(method="bfill").fillna(method="ffill").tolist()
+        hrv_series = df["hrv_last_night"].tail(7).bfill().ffill().tolist()
         if len(hrv_series) > 1:
             st.plotly_chart(make_sparkline(hrv_series, "#6366f1"), config={'displayModeBar': False}, use_container_width=True)
 
@@ -351,7 +351,7 @@ with tab_today:
         </div>
         """, unsafe_allow_html=True)
         # 7-day sparkline
-        sleep_series = df["sleep_score"].tail(7).fillna(method="bfill").fillna(method="ffill").tolist()
+        sleep_series = df["sleep_score"].tail(7).bfill().ffill().tolist()
         if len(sleep_series) > 1:
             st.plotly_chart(make_sparkline(sleep_series, "#8b5cf6"), config={'displayModeBar': False}, use_container_width=True)
 
@@ -368,7 +368,7 @@ with tab_today:
         </div>
         """, unsafe_allow_html=True)
         # 7-day sparkline
-        hrv_avg_series = df["resting_hr"].tail(7).fillna(method="bfill").fillna(method="ffill").tolist()
+        hrv_avg_series = df["resting_hr"].tail(7).bfill().ffill().tolist()
         if len(hrv_avg_series) > 1:
             st.plotly_chart(make_sparkline(hrv_avg_series, "#ef4444"), config={'displayModeBar': False}, use_container_width=True)
 
@@ -385,7 +385,7 @@ with tab_today:
         </div>
         """, unsafe_allow_html=True)
         # 7-day sparkline
-        stress_series = df["stress_avg"].tail(7).fillna(method="bfill").fillna(method="ffill").tolist()
+        stress_series = df["stress_avg"].tail(7).bfill().ffill().tolist()
         if len(stress_series) > 1:
             st.plotly_chart(make_sparkline(stress_series, "#f59e0b"), config={'displayModeBar': False}, use_container_width=True)
 
@@ -402,7 +402,7 @@ with tab_today:
         </div>
         """, unsafe_allow_html=True)
         # 7-day sparkline
-        bb_series = df["bb_min"].tail(7).fillna(method="bfill").fillna(method="ffill").tolist()
+        bb_series = df["bb_min"].tail(7).bfill().ffill().tolist()
         if len(bb_series) > 1:
             st.plotly_chart(make_sparkline(bb_series, "#10b981"), config={'displayModeBar': False}, use_container_width=True)
 
