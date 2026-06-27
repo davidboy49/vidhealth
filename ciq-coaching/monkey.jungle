@@ -1,0 +1,8 @@
+{
+  "project": {
+    "name": "HermesCoach",
+    "type": "datafield",
+    "entrypoint": "HermesCoachApp",
+    "devices": ["fenix7x"]
+  }
+}
