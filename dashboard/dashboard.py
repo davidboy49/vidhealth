@@ -286,12 +286,14 @@ def make_sparkline(series, color):
     return fig
 
 # ---------- TABS (EMOJI-LESS PLAIN TEXT HEADERS) ----------
-tab_today, tab_trends, tab_ai, tab_recovery = st.tabs([
+tab_today, tab_trends, tab_comp, tab_ai, tab_recovery = st.tabs([
     "Today", 
     "Trends", 
+    "Body Comp",
     "AI Insights", 
     "Recovery Forecast"
 ])
+
 
 # ==================== TAB 1: TODAY'S SNAPSHOT ====================
 with tab_today:
@@ -693,36 +695,7 @@ with tab_trends:
             )
             st.plotly_chart(fig_spo2, use_container_width=True)
 
-        # Render Body Composition trends if data exists
-        comp_df = db.get_body_comp_df(limit=30)
-        if not comp_df.empty:
-            fig_comp = go.Figure()
-            fig_comp.add_trace(go.Scatter(
-                x=comp_df["date"], y=comp_df["weight"],
-                mode="lines+markers", name="Weight (kg)",
-                line=dict(color="#2563eb", width=2),
-                marker=dict(size=4)
-            ))
-            if "body_fat" in comp_df.columns and comp_df["body_fat"].notna().any():
-                fig_comp.add_trace(go.Scatter(
-                    x=comp_df["date"], y=comp_df["body_fat"],
-                    mode="lines+markers", name="Body Fat (%)",
-                    line=dict(color="#db2777", width=2),
-                    marker=dict(size=4),
-                    yaxis="y2"
-                ))
-            fig_comp.update_layout(
-                template=plotly_template,
-                title="Body Composition Tracking",
-                hovermode="x unified",
-                yaxis=dict(title="Weight (kg)", side="left", gridcolor=grid_color),
-                yaxis2=dict(title="Body Fat (%)", overlaying="y", side="right", showgrid=False),
-                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                height=280,
-                margin=dict(l=40, r=40, t=40, b=30),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-            )
-            st.plotly_chart(fig_comp, use_container_width=True)
+
 
         # Automated Correlation Discovery Panel
         st.markdown("<h3 style='font-size: 1.125rem; font-weight: 700; letter-spacing: -0.02em; margin-top: 24px; margin-bottom: 12px;'>Biometric Correlation Insights</h3>", unsafe_allow_html=True)
@@ -764,7 +737,59 @@ with tab_trends:
     else:
         st.info("Accumulating data. Wear watch consistently to show trend charts.")
 
-# ==================== TAB 3: AI INSIGHTS ====================
+# ==================== TAB 3: BODY COMPOSITION ====================
+with tab_comp:
+    st.markdown("<h3 style='font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 16px;'>Body Composition Tracking</h3>", unsafe_allow_html=True)
+    
+    comp_df = db.get_body_comp_df(limit=30)
+    if not comp_df.empty:
+        fig_comp = go.Figure()
+        fig_comp.add_trace(go.Scatter(
+            x=comp_df["date"], y=comp_df["weight"],
+            mode="lines+markers", name="Weight (kg)",
+            line=dict(color="#2563eb", width=2),
+            marker=dict(size=4)
+        ))
+        if "body_fat" in comp_df.columns and comp_df["body_fat"].notna().any():
+            fig_comp.add_trace(go.Scatter(
+                x=comp_df["date"], y=comp_df["body_fat"],
+                mode="lines+markers", name="Body Fat (%)",
+                line=dict(color="#db2777", width=2),
+                marker=dict(size=4),
+                yaxis="y2"
+            ))
+        fig_comp.update_layout(
+            template=plotly_template,
+            hovermode="x unified",
+            yaxis=dict(title="Weight (kg)", side="left", gridcolor=grid_color),
+            yaxis2=dict(title="Body Fat (%)", overlaying="y", side="right", showgrid=False),
+            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+            height=320,
+            margin=dict(l=40, r=40, t=10, b=30),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
+        st.plotly_chart(fig_comp, use_container_width=True)
+        
+        # Display body comp logs in a table
+        st.markdown("<h4 style='font-size: 1rem; font-weight: 700; letter-spacing: -0.01em; margin-top: 24px; margin-bottom: 12px;'>Logged Entries</h4>", unsafe_allow_html=True)
+        styled_df = comp_df[["date", "weight", "body_fat", "waist"]].rename(columns={
+            "date": "Date",
+            "weight": "Weight (kg)",
+            "body_fat": "Body Fat (%)",
+            "waist": "Waist (cm)"
+        }).sort_values(by="Date", ascending=False)
+        st.dataframe(styled_df, hide_index=True, use_container_width=True)
+    else:
+        st.markdown("""
+        <div class="shadcn-card" style="padding: 24px;">
+            <div style="font-weight: 600; font-size: 0.875rem;">No Entries Logged Yet</div>
+            <p style="font-size: 0.875rem; color: var(--muted-foreground); margin-top: 4px;">
+                Log your weight, body fat %, and waist size in the sidebar to start tracking composition trends.
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+# ==================== TAB 4: AI INSIGHTS ====================
 with tab_ai:
     st.markdown(f"<h3 style='font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 12px; display: flex; align-items: center;'>{LUCIDE_SPARKLES} Gemini AI Biometric Insights</h3>", unsafe_allow_html=True)
     
