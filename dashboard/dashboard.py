@@ -17,20 +17,6 @@ st.set_page_config(page_title="Hermes Health", page_icon="⚡", layout="wide")
 if "theme" not in st.session_state:
     st.session_state.theme = "light"
 
-# Header Row
-cols_header = st.columns([9, 1])
-with cols_header[0]:
-    st.markdown("""
-        <div style="margin-bottom: 20px;">
-            <h1 style="font-size: 2rem; font-weight: 800; letter-spacing: -0.05em; margin: 0;">Hermes Health</h1>
-            <p style="font-size: 0.875rem; color: var(--muted-foreground); margin: 2px 0 0 0;">Personal biometric tracking & training recommendations</p>
-        </div>
-    """, unsafe_allow_html=True)
-with cols_header[1]:
-    if st.button("☀️ Light" if st.session_state.theme == "dark" else "🌙 Dark"):
-        st.session_state.theme = "light" if st.session_state.theme == "dark" else "dark"
-        st.rerun()
-
 # Apply CSS variables matching Shadcn UI design tokens
 if st.session_state.theme == "dark":
     # Zinc Dark Palette
@@ -55,6 +41,7 @@ else:
     plotly_template = "plotly_white"
     grid_color = "#f4f4f5"
 
+# Inject Stylesheet at the very beginning
 st.markdown(f"""
 <style>
     /* CSS Variables Setup */
@@ -83,19 +70,17 @@ st.markdown(f"""
         border-color: var(--border) !important;
     }}
 
-    /* Clean up headers and top margin dark colors */
+    /* Hide Streamlit default headers completely to avoid sticky color mismatches */
     header[data-testid="stHeader"] {{
-        background-color: var(--background) !important;
-        border-bottom: 1px solid var(--border) !important;
+        display: none !important;
     }}
     
     div[data-testid="stDecoration"] {{
-        background-image: none !important;
-        background-color: var(--border) !important;
+        display: none !important;
     }}
     
     div.block-container {{
-        padding-top: 1.5rem !important;
+        padding-top: 2rem !important;
         background-color: var(--background) !important;
     }}
     
@@ -133,7 +118,6 @@ st.markdown(f"""
         0% {{ transform: rotate(0deg); }}
         100% {{ transform: rotate(360deg); }}
     }}
-
 
     /* Shadcn Card Component */
     .shadcn-card {{
@@ -274,7 +258,28 @@ LUCIDE_DUMBBELL = '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18
 LUCIDE_SPARKLES = '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide-icon-active" style="margin-right:8px;"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>'
 LUCIDE_ALERT_TRIANGLE = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide-icon-active" style="margin-right:8px;"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" x2="12" y1="9" y2="13"/><line x1="12" x2="12.01" y1="17" y2="17"/></svg>'
 
+# Get last sync time
+db_path = Path(__file__).parent.parent / "health.db"
+last_sync_str = "Never"
+if db_path.exists():
+    mtime = db_path.stat().st_mtime
+    last_sync_str = datetime.fromtimestamp(mtime).strftime("%b %d, %H:%M")
 
+# Header Row (now inherits correct variables)
+cols_header = st.columns([9, 1])
+with cols_header[0]:
+    st.markdown(f"""
+        <div style="margin-bottom: 20px;">
+            <h1 style="font-size: 2rem; font-weight: 800; letter-spacing: -0.05em; margin: 0;">Hermes Health</h1>
+            <p style="font-size: 0.875rem; color: var(--muted-foreground); margin: 2px 0 0 0;">
+                Personal biometric tracking & training recommendations &bull; Last synced: {last_sync_str}
+            </p>
+        </div>
+    """, unsafe_allow_html=True)
+with cols_header[1]:
+    if st.button("☀️ Light" if st.session_state.theme == "dark" else "🌙 Dark"):
+        st.session_state.theme = "light" if st.session_state.theme == "dark" else "dark"
+        st.rerun()
 
 # ---------- INITIAL LOADING SCREEN ----------
 loader = st.empty()
@@ -285,6 +290,7 @@ with loader.container():
         <div style="font-size: 0.875rem; font-weight: 500; color: var(--muted-foreground); letter-spacing: 0.05em; text-transform: uppercase;">Loading biometrics...</div>
     </div>
     """, unsafe_allow_html=True)
+
 
 
 # ---------- DATA LOADING ----------
