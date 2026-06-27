@@ -1,27 +1,40 @@
 #!/usr/bin/env python3
 """
-Garmin Health Sync — fetches HRV, sleep, heart rate, body battery, stress, training readiness.
-Uses garminconnect library (actively maintained).
-Stores as JSONL per day in /root/garmin-health/data/.
+Garmin Health Sync — fetches HRV, sleep, heart rate, body battery, stress, training readiness, SpO2, and respiration.
+Uses garminconnect library.
+Stores as JSON per day and saves to SQLite database.
 """
 
-import json, os, sys, time
+import json
+import os
+import sys
+import time
 from datetime import date, timedelta
 from pathlib import Path
 
-import yaml
+from dotenv import load_dotenv
 from garminconnect import Garmin
 
-CONFIG_PATH = Path(__file__).parent / "config.yaml"
+# Load environment variables
+load_dotenv(Path(__file__).parent / ".env")
+
+import db
+
 DATA_DIR = Path(__file__).parent / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-with open(CONFIG_PATH) as f:
-    config = yaml.safe_load(f)
+TOKEN_STORE = Path(__file__).parent / ".garmin_tokens"
+TOKEN_STORE.mkdir(parents=True, exist_ok=True)
 
 def get_api():
-    api = Garmin(config["email"], config["password"])
-    api.login()
+    email = os.environ.get("GARMIN_EMAIL")
+    password = os.environ.get("GARMIN_PASSWORD")
+    if not email or not password:
+        raise ValueError("GARMIN_EMAIL or GARMIN_PASSWORD environment variables not set in .env")
+    
+    # Enable session token storage to prevent 429 rate limit errors
+    api = Garmin(email, password)
+    api.login(str(TOKEN_STORE))
     return api
 
 def sync_date(api, target_date: str) -> dict:
@@ -36,7 +49,7 @@ def sync_date(api, target_date: str) -> dict:
         result["hrv_error"] = str(e)
     
     try:
-        sleep = api.get_daily_sleep(target_date)
+        sleep = api.get_sleep_data(target_date)
         if sleep:
             result["sleep"] = sleep
     except Exception as e:
@@ -64,7 +77,7 @@ def sync_date(api, target_date: str) -> dict:
         result["stress_error"] = str(e)
     
     try:
-        steps = api.get_daily_steps(target_date)
+        steps = api.get_steps_data(target_date)
         if steps:
             result["steps"] = steps
     except Exception as e:
@@ -78,13 +91,40 @@ def sync_date(api, target_date: str) -> dict:
         result["readiness_error"] = str(e)
     
     try:
-        summary = api.get_daily_summary(target_date)
+        summary = api.get_stats(target_date)
         if summary:
             result["summary"] = summary
     except Exception as e:
         result["summary_error"] = str(e)
+
+    try:
+        pulse_ox = api.get_spo2_data(target_date)
+        if pulse_ox:
+            result["pulse_ox"] = pulse_ox
+    except Exception as e:
+        result["pulse_ox_error"] = str(e)
+
+    try:
+        respiration = api.get_respiration_data(target_date)
+        if respiration:
+            result["respiration"] = respiration
+    except Exception as e:
+        result["respiration_error"] = str(e)
     
     return result
+
+def save_result(target_date: str, data: dict):
+    # Save raw JSON backup
+    out_path = DATA_DIR / f"{target_date}.json"
+    with open(out_path, "w") as f:
+        json.dump(data, f, indent=2, default=str)
+    
+    # Save to SQLite DB
+    try:
+        db.save_day(target_date, data)
+        print(f"[OK] {target_date} - saved to DB")
+    except Exception as e:
+        print(f"[FAIL] {target_date} - DB error: {e}")
 
 def backfill(days: int = 14):
     """Backfill the last N days of data."""
@@ -94,26 +134,36 @@ def backfill(days: int = 14):
         d = today - timedelta(days=i)
         ds = d.isoformat()
         out_path = DATA_DIR / f"{ds}.json"
-        if out_path.exists():
-            print(f"[~] {ds} — already synced")
-            continue
-        print(f"[→] {ds} — fetching...")
+        
+        # Check if already synced in DB or file
+        if out_path.exists() and i > 1:
+            try:
+                conn = db.get_connection()
+                cursor = conn.cursor()
+                cursor.execute("SELECT date FROM daily_metrics WHERE date = ?", (ds,))
+                row = cursor.fetchone()
+                conn.close()
+                if row:
+                    print(f"[SKIP] {ds} - already synced")
+                    continue
+            except Exception:
+                pass
+        
+        print(f"[SYNC] {ds} - fetching...")
         data = sync_date(api, ds)
-        with open(out_path, "w") as f:
-            json.dump(data, f, indent=2, default=str)
-        print(f"[✓] {ds} — saved")
+        save_result(ds, data)
+        print(f"[OK] {ds} - synced")
         time.sleep(1)  # rate limit safety
-    print(f"\n[Done] Synced {days} days to {DATA_DIR}")
+    print(f"\n[DONE] Synced {days} days")
 
 def sync_today():
     """Sync just today (for cron use)."""
     api = get_api()
     d = date.today().isoformat()
-    out_path = DATA_DIR / f"{d}.json"
+    print(f"[SYNC] Syncing {d}...")
     data = sync_date(api, d)
-    with open(out_path, "w") as f:
-        json.dump(data, f, indent=2, default=str)
-    print(f"[✓] {d} — synced")
+    save_result(d, data)
+    print(f"[OK] {d} - completed sync")
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "backfill":

@@ -1,0 +1,13 @@
+# Garmin health tracking credentials and session cache
+.env
+.garmin_tokens/
+
+# SQLite Database
+health.db
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Local data (excluding standard project directories)
+*.log
