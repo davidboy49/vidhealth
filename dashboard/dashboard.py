@@ -10,7 +10,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 import db
 from recovery_predictor import RecoveryPredictor
 
-st.set_page_config(page_title="Hermes Health", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="VID Health", page_icon="⚡", layout="wide")
 
 # ---------- THEME CONFIGURATION (SHADCN STYLING) ----------
 # FIRST PRIORITY: Default to Light mode
@@ -270,7 +270,7 @@ cols_header = st.columns([9, 1])
 with cols_header[0]:
     st.markdown(f"""
         <div style="margin-bottom: 20px;">
-            <h1 style="font-size: 2rem; font-weight: 800; letter-spacing: -0.05em; margin: 0;">Hermes Health</h1>
+            <h1 style="font-size: 2rem; font-weight: 800; letter-spacing: -0.05em; margin: 0;">VID Health</h1>
             <p style="font-size: 0.875rem; color: var(--muted-foreground); margin: 2px 0 0 0;">
                 Personal biometric tracking & training recommendations &bull; Last synced: {last_sync_str}
             </p>
