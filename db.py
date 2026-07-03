@@ -198,18 +198,22 @@ def save_day(date_str: str, raw_data: dict):
     conn.commit()
     conn.close()
 
-def get_df(limit: int = 30):
+def get_df(limit: int | None = 30):
     """
     Loads daily metrics as a pandas DataFrame.
     """
     import pandas as pd
     init_db()
     conn = get_connection()
-    df = pd.read_sql_query(f"""
-        SELECT * FROM daily_metrics 
-        ORDER BY date ASC 
-        LIMIT {limit}
-    """, conn)
+    query = """
+        SELECT * FROM daily_metrics
+        ORDER BY date ASC
+    """
+    params = ()
+    if limit is not None:
+        query += " LIMIT ?"
+        params = (int(limit),)
+    df = pd.read_sql_query(query, conn, params=params)
     conn.close()
     return df
 
