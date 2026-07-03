@@ -590,58 +590,354 @@ with tab_today:
 
 # ==================== TAB 2: TREND ANALYSIS ====================
 with tab_trends:
-    st.markdown("<h3 style='font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 16px;'>Biometric Trends (30 Days)</h3>", unsafe_allow_html=True)
-    
-    if len(df) > 1:
-        # Chart 1: HRV vs Resting HR
+    st.markdown("<h3 style='font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 6px;'>Biometric Trends</h3>", unsafe_allow_html=True)
+    st.markdown("<p style='font-size: 0.875rem; color: var(--muted-foreground); margin: 0 0 16px 0;'>Track direction, compare against broad wellness reference ranges, and spot improvement opportunities.</p>", unsafe_allow_html=True)
+
+    trend_all_df = db.get_df(limit=None).copy()
+    trend_all_df["date"] = pd.to_datetime(trend_all_df["date"], errors="coerce")
+    trend_all_df = trend_all_df.dropna(subset=["date"]).sort_values("date")
+
+    if len(trend_all_df) > 1:
+        range_col, focus_col = st.columns([2, 3])
+        with range_col:
+            trend_range = st.selectbox("Time range", ["30 days", "90 days", "180 days", "All"], index=0)
+        with focus_col:
+            st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+            st.caption("Reference bands are broad adult wellness ranges, not diagnostic thresholds. Personal baseline matters most for HRV and recovery metrics.")
+
+        if trend_range == "All":
+            trend_df = trend_all_df.copy()
+        else:
+            days = int(trend_range.split()[0])
+            cutoff = trend_all_df["date"].max() - pd.Timedelta(days=days - 1)
+            trend_df = trend_all_df[trend_all_df["date"] >= cutoff].copy()
+
+        if len(trend_df) < 2:
+            st.info("Not enough records in this range, so Trends is showing all available history.")
+            trend_df = trend_all_df.copy()
+
+        def metric_mean(frame, col):
+            return frame[col].mean() if col in frame.columns and frame[col].notna().any() else None
+
+        def metric_latest(frame, col):
+            if col not in frame.columns or frame[col].dropna().empty:
+                return None
+            return frame[col].dropna().iloc[-1]
+
+        def fmt_value(value, suffix="", decimals=0):
+            if value is None or pd.isna(value):
+                return "-"
+            if decimals == 0:
+                return f"{value:.0f}{suffix}"
+            return f"{value:.{decimals}f}{suffix}"
+
+        def clamp(value, low=0, high=100):
+            if value is None or pd.isna(value):
+                return None
+            return max(low, min(high, value))
+
+        latest_hrv = metric_latest(trend_df, "hrv_last_night")
+        latest_hrv_base = metric_latest(trend_df, "hrv_weekly_avg") or metric_mean(trend_df.tail(7), "hrv_last_night")
+        latest_sleep = metric_latest(trend_df, "sleep_score")
+        latest_rhr = metric_latest(trend_df, "resting_hr")
+        latest_stress = metric_latest(trend_df, "stress_avg")
+        latest_bb = metric_latest(trend_df, "bb_min")
+        latest_readiness = metric_latest(trend_df, "training_readiness")
+
+        recovery_parts = []
+        if latest_hrv is not None and latest_hrv_base and latest_hrv_base > 0:
+            recovery_parts.append(clamp((latest_hrv / latest_hrv_base) * 100))
+        if latest_sleep is not None:
+            recovery_parts.append(clamp(latest_sleep))
+        if latest_stress is not None:
+            recovery_parts.append(clamp(100 - latest_stress))
+        if latest_bb is not None:
+            recovery_parts.append(clamp(latest_bb))
+        if latest_readiness is not None:
+            recovery_parts.append(clamp(latest_readiness))
+        recovery_index = sum(recovery_parts) / len(recovery_parts) if recovery_parts else None
+
+        hrv_delta = latest_hrv - latest_hrv_base if latest_hrv is not None and latest_hrv_base is not None else None
+        avg_sleep_hours = metric_mean(trend_df, "sleep_duration")
+        avg_sleep_hours = avg_sleep_hours / 3600 if avg_sleep_hours is not None else None
+        sleep_debt = max(0, 7 - avg_sleep_hours) if avg_sleep_hours is not None else None
+        avg_rhr = metric_mean(trend_df, "resting_hr")
+
+        st.markdown("""
+        <style>
+        .trend-card-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+        .trend-mini-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
+        .trend-mini-label { color: var(--muted-foreground); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
+        .trend-mini-value { color: var(--foreground); font-size: 1.35rem; font-weight: 800; line-height: 1.25; margin-top: 3px; }
+        .trend-mini-sub { color: var(--muted-foreground); font-size: 0.78rem; margin-top: 2px; }
+        .reference-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 10px 0 18px 0; }
+        .reference-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 14px; border-left: 4px solid var(--border); }
+        .reference-title { font-size: 0.78rem; color: var(--muted-foreground); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700; }
+        .reference-value { font-size: 1rem; font-weight: 800; margin-top: 4px; }
+        .reference-note { font-size: 0.78rem; color: var(--muted-foreground); margin-top: 4px; line-height: 1.4; }
+        @media (max-width: 900px) { .trend-card-row, .reference-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+        @media (max-width: 520px) { .trend-card-row, .reference-grid { grid-template-columns: 1fr; } }
+        </style>
+        """, unsafe_allow_html=True)
+
+        hrv_delta_label = fmt_value(hrv_delta, " ms") if hrv_delta is not None else "-"
+        hrv_delta_sub = "vs current 7-day baseline" if hrv_delta is not None else "needs HRV baseline"
+        sleep_debt_label = fmt_value(sleep_debt, "h", 1) if sleep_debt is not None else "-"
+        rhr_label = fmt_value(avg_rhr, " bpm")
+
+        st.markdown(f"""
+        <div class="trend-card-row">
+            <div class="trend-mini-card"><div class="trend-mini-label">Recovery Index</div><div class="trend-mini-value">{fmt_value(recovery_index, '/100')}</div><div class="trend-mini-sub">latest blended recovery signal</div></div>
+            <div class="trend-mini-card"><div class="trend-mini-label">HRV Delta</div><div class="trend-mini-value">{hrv_delta_label}</div><div class="trend-mini-sub">{hrv_delta_sub}</div></div>
+            <div class="trend-mini-card"><div class="trend-mini-label">Sleep Debt</div><div class="trend-mini-value">{sleep_debt_label}</div><div class="trend-mini-sub">avg shortfall from 7h target</div></div>
+            <div class="trend-mini-card"><div class="trend-mini-label">Avg Resting HR</div><div class="trend-mini-value">{rhr_label}</div><div class="trend-mini-sub">selected range average</div></div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Create derived trend series.
+        derived_df = trend_df.copy()
+        derived_df["hrv_baseline"] = derived_df["hrv_weekly_avg"] if "hrv_weekly_avg" in derived_df.columns else pd.NA
+        if "hrv_last_night" in derived_df.columns:
+            derived_df["hrv_baseline"] = derived_df["hrv_baseline"].fillna(derived_df["hrv_last_night"].rolling(7, min_periods=2).mean())
+            derived_df["hrv_delta"] = derived_df["hrv_last_night"] - derived_df["hrv_baseline"]
+        score_components = []
+        if "hrv_last_night" in derived_df.columns:
+            score_components.append(((derived_df["hrv_last_night"] / derived_df["hrv_baseline"]) * 100).clip(0, 100))
+        if "sleep_score" in derived_df.columns:
+            score_components.append(derived_df["sleep_score"].clip(0, 100))
+        if "stress_avg" in derived_df.columns:
+            score_components.append((100 - derived_df["stress_avg"]).clip(0, 100))
+        if "bb_min" in derived_df.columns:
+            score_components.append(derived_df["bb_min"].clip(0, 100))
+        if "training_readiness" in derived_df.columns:
+            score_components.append(derived_df["training_readiness"].clip(0, 100))
+        if score_components:
+            derived_df["recovery_index"] = pd.concat(score_components, axis=1).mean(axis=1)
+
+        reference_items = []
+        if avg_rhr is not None:
+            if avg_rhr < 60:
+                rhr_status = "Athletic/low"
+                rhr_color = "#10b981"
+            elif avg_rhr <= 100:
+                rhr_status = "Within adult range"
+                rhr_color = "#10b981"
+            else:
+                rhr_status = "Above adult range"
+                rhr_color = "#ef4444"
+            reference_items.append(("Resting HR", rhr_status, "Adult reference: 60-100 bpm; trained athletes may be lower.", rhr_color))
+        if avg_sleep_hours is not None:
+            sleep_status = "On target" if avg_sleep_hours >= 7 else "Below 7h target"
+            sleep_color = "#10b981" if avg_sleep_hours >= 7 else "#f59e0b"
+            reference_items.append(("Sleep Duration", sleep_status, f"Average: {avg_sleep_hours:.1f}h. Adult guidance commonly starts at 7h/night.", sleep_color))
+        spo2_avg = metric_mean(trend_df, "spo2_avg")
+        if spo2_avg is not None:
+            spo2_status = "Typical" if spo2_avg >= 95 else "Watch trend"
+            spo2_color = "#10b981" if spo2_avg >= 95 else "#f59e0b"
+            reference_items.append(("SpO2", spo2_status, f"Average: {spo2_avg:.1f}%. Typical pulse ox readings are often 95-100%.", spo2_color))
+        resp_avg = metric_mean(trend_df, "respiration_avg")
+        if resp_avg is not None:
+            resp_status = "Typical" if 12 <= resp_avg <= 20 else "Outside common band"
+            resp_color = "#10b981" if 12 <= resp_avg <= 20 else "#f59e0b"
+            reference_items.append(("Respiration", resp_status, f"Average: {resp_avg:.1f}/min. Common adult resting band: 12-20/min.", resp_color))
+
+        if reference_items:
+            st.markdown("<h4 style='font-size: 1rem; font-weight: 700; letter-spacing: -0.01em; margin-top: 8px; margin-bottom: 8px;'>Reference Range Snapshot</h4>", unsafe_allow_html=True)
+            st.markdown(f"""
+            <div class="reference-grid">
+                {''.join(f'<div class="reference-card" style="border-left-color: {color};"><div class="reference-title">{title}</div><div class="reference-value">{status}</div><div class="reference-note">{note}</div></div>' for title, status, note, color in reference_items)}
+            </div>
+            """, unsafe_allow_html=True)
+
+        # Improvement trend: blended recovery index and HRV baseline deviation.
+        if "recovery_index" in derived_df.columns and derived_df["recovery_index"].notna().any():
+            fig_improve = go.Figure()
+            fig_improve.add_trace(go.Scatter(
+                x=derived_df["date"], y=derived_df["recovery_index"],
+                mode="lines+markers", name="Recovery Index",
+                line=dict(color="#2563eb", width=3), marker=dict(size=5)
+            ))
+            if "training_readiness" in derived_df.columns and derived_df["training_readiness"].notna().any():
+                fig_improve.add_trace(go.Scatter(
+                    x=derived_df["date"], y=derived_df["training_readiness"],
+                    mode="lines", name="Training Readiness",
+                    line=dict(color="#10b981", width=2, dash="dot")
+                ))
+            fig_improve.add_hrect(y0=75, y1=100, fillcolor="rgba(16,185,129,0.08)", line_width=0)
+            fig_improve.add_hrect(y0=0, y1=50, fillcolor="rgba(239,68,68,0.06)", line_width=0)
+            fig_improve.update_layout(
+                template=plotly_template,
+                title="Improvement Trend: Recovery Index",
+                hovermode="x unified",
+                yaxis=dict(title="Score", range=[0, 100], gridcolor=grid_color),
+                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                height=320,
+                margin=dict(l=40, r=40, t=40, b=30),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            )
+            st.plotly_chart(fig_improve, use_container_width=True)
+
+        col_base, col_load = st.columns(2)
+        with col_base:
+            if "hrv_delta" in derived_df.columns and derived_df["hrv_delta"].notna().any():
+                hrv_colors = ["#10b981" if val >= 0 else "#ef4444" for val in derived_df["hrv_delta"].fillna(0)]
+                fig_hrv_delta = go.Figure()
+                fig_hrv_delta.add_trace(go.Bar(
+                    x=derived_df["date"], y=derived_df["hrv_delta"],
+                    name="HRV vs Baseline", marker_color=hrv_colors
+                ))
+                fig_hrv_delta.add_hline(y=0, line_color=grid_color)
+                fig_hrv_delta.update_layout(
+                    template=plotly_template,
+                    title="HRV Baseline Deviation",
+                    yaxis=dict(title="ms vs baseline", gridcolor=grid_color),
+                    plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                    height=280,
+                    margin=dict(l=40, r=30, t=40, b=30),
+                    showlegend=False
+                )
+                st.plotly_chart(fig_hrv_delta, use_container_width=True)
+
+        with col_load:
+            if "training_readiness" in trend_df.columns and trend_df["training_readiness"].notna().any():
+                fig_load = go.Figure()
+                fig_load.add_trace(go.Scatter(
+                    x=trend_df["date"], y=trend_df["training_readiness"],
+                    mode="lines+markers", name="Readiness",
+                    line=dict(color="#10b981", width=2), marker=dict(size=4)
+                ))
+                if "stress_avg" in trend_df.columns and trend_df["stress_avg"].notna().any():
+                    fig_load.add_trace(go.Bar(
+                        x=trend_df["date"], y=trend_df["stress_avg"],
+                        name="Stress Load", marker_color="rgba(245,158,11,0.45)"
+                    ))
+                fig_load.update_layout(
+                    template=plotly_template,
+                    title="Readiness vs Stress Load",
+                    hovermode="x unified",
+                    yaxis=dict(title="Score", range=[0, 100], gridcolor=grid_color),
+                    plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                    height=280,
+                    margin=dict(l=40, r=30, t=40, b=30),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                )
+                st.plotly_chart(fig_load, use_container_width=True)
+
+        # Pie chart section.
+        pie_left, pie_mid, pie_right = st.columns(3)
+        with pie_left:
+            sleep_cols = ["sleep_deep", "sleep_rem", "sleep_light", "sleep_awake"]
+            if all(col in trend_df.columns for col in sleep_cols) and trend_df[sleep_cols].notna().any().any():
+                sleep_values = [trend_df[col].mean() / 3600 for col in sleep_cols]
+                fig_sleep_pie = go.Figure(data=[go.Pie(
+                    labels=["Deep", "REM", "Light", "Awake"], values=sleep_values,
+                    hole=0.52,
+                    marker=dict(colors=["#1e1b4b", "#4f46e5", "#818cf8", "#d4d4d8"]),
+                    textinfo="label+percent"
+                )])
+                fig_sleep_pie.update_layout(
+                    template=plotly_template,
+                    title="Average Sleep Mix",
+                    height=290,
+                    margin=dict(l=10, r=10, t=40, b=10),
+                    showlegend=False,
+                    paper_bgcolor="rgba(0,0,0,0)"
+                )
+                st.plotly_chart(fig_sleep_pie, use_container_width=True)
+        with pie_mid:
+            if recovery_index is not None:
+                strain_index = max(0, 100 - recovery_index)
+                fig_balance_pie = go.Figure(data=[go.Pie(
+                    labels=["Recovery", "Strain"], values=[recovery_index, strain_index],
+                    hole=0.58,
+                    marker=dict(colors=["#10b981", "#ef4444"]),
+                    textinfo="label+percent"
+                )])
+                fig_balance_pie.update_layout(
+                    template=plotly_template,
+                    title="Current Recovery Balance",
+                    height=290,
+                    margin=dict(l=10, r=10, t=40, b=10),
+                    showlegend=False,
+                    paper_bgcolor="rgba(0,0,0,0)"
+                )
+                st.plotly_chart(fig_balance_pie, use_container_width=True)
+        with pie_right:
+            readiness_source = derived_df["recovery_index"] if "recovery_index" in derived_df.columns else trend_df.get("training_readiness")
+            if readiness_source is not None and readiness_source.notna().any():
+                ready_days = int((readiness_source >= 75).sum())
+                moderate_days = int(((readiness_source >= 50) & (readiness_source < 75)).sum())
+                low_days = int((readiness_source < 50).sum())
+                fig_days_pie = go.Figure(data=[go.Pie(
+                    labels=["Ready", "Moderate", "Recovery Focus"], values=[ready_days, moderate_days, low_days],
+                    hole=0.52,
+                    marker=dict(colors=["#10b981", "#f59e0b", "#ef4444"]),
+                    textinfo="label+percent"
+                )])
+                fig_days_pie.update_layout(
+                    template=plotly_template,
+                    title="Days by Recovery State",
+                    height=290,
+                    margin=dict(l=10, r=10, t=40, b=10),
+                    showlegend=False,
+                    paper_bgcolor="rgba(0,0,0,0)"
+                )
+                st.plotly_chart(fig_days_pie, use_container_width=True)
+
+        # Chart 1: HRV vs Resting HR with adult reference band for resting HR.
         fig_hr = go.Figure()
-        if "hrv_last_night" in df.columns and df["hrv_last_night"].notna().any():
+        if "hrv_last_night" in trend_df.columns and trend_df["hrv_last_night"].notna().any():
             fig_hr.add_trace(go.Scatter(
-                x=df["date"], y=df["hrv_last_night"],
+                x=trend_df["date"], y=trend_df["hrv_last_night"],
                 mode="lines+markers", name="HRV (ms)",
-                line=dict(color="#6366f1", width=2), # indigo-500
+                line=dict(color="#6366f1", width=2),
                 marker=dict(size=4)
             ))
-        if "resting_hr" in df.columns and df["resting_hr"].notna().any():
+        if "resting_hr" in trend_df.columns and trend_df["resting_hr"].notna().any():
             fig_hr.add_trace(go.Scatter(
-                x=df["date"], y=df["resting_hr"],
+                x=trend_df["date"], y=trend_df["resting_hr"],
                 mode="lines+markers", name="Resting HR (bpm)",
-                line=dict(color="#ef4444", width=2), # red-500
+                line=dict(color="#ef4444", width=2),
                 marker=dict(size=4),
                 yaxis="y2"
             ))
+            fig_hr.add_hrect(y0=60, y1=100, yref="y2", fillcolor="rgba(16,185,129,0.06)", line_width=0)
         fig_hr.update_layout(
             template=plotly_template,
+            title="HRV and Resting Heart Rate",
             hovermode="x unified",
             yaxis=dict(title="HRV (ms)", side="left", gridcolor=grid_color),
             yaxis2=dict(title="Resting HR (bpm)", overlaying="y", side="right", showgrid=False),
             plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
             height=300,
-            margin=dict(l=40, r=40, t=10, b=30),
+            margin=dict(l=40, r=40, t=40, b=30),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
         )
         st.plotly_chart(fig_hr, use_container_width=True)
 
         # Chart 2: Sleep Architecture Breakdown (Stacked Bar)
-        if "sleep_deep" in df.columns and df["sleep_deep"].notna().any():
+        if "sleep_deep" in trend_df.columns and trend_df["sleep_deep"].notna().any():
             fig_sleep_arch = go.Figure()
-            deep_hrs = df["sleep_deep"] / 3600.0
-            rem_hrs = df["sleep_rem"] / 3600.0
-            light_hrs = df["sleep_light"] / 3600.0
-            awake_hrs = df["sleep_awake"] / 3600.0
-            
-            fig_sleep_arch.add_trace(go.Bar(x=df["date"], y=deep_hrs, name="Deep Sleep", marker_color="#1e1b4b"))
-            fig_sleep_arch.add_trace(go.Bar(x=df["date"], y=rem_hrs, name="REM Sleep", marker_color="#4f46e5"))
-            fig_sleep_arch.add_trace(go.Bar(x=df["date"], y=light_hrs, name="Light Sleep", marker_color="#818cf8"))
-            fig_sleep_arch.add_trace(go.Bar(x=df["date"], y=awake_hrs, name="Awake Time", marker_color="#e4e4e7"))
-            
+            deep_hrs = trend_df["sleep_deep"] / 3600.0
+            rem_hrs = trend_df["sleep_rem"] / 3600.0
+            light_hrs = trend_df["sleep_light"] / 3600.0
+            awake_hrs = trend_df["sleep_awake"] / 3600.0
+            total_sleep_hrs = trend_df["sleep_duration"] / 3600.0 if "sleep_duration" in trend_df.columns else deep_hrs + rem_hrs + light_hrs
+
+            fig_sleep_arch.add_trace(go.Bar(x=trend_df["date"], y=deep_hrs, name="Deep Sleep", marker_color="#1e1b4b"))
+            fig_sleep_arch.add_trace(go.Bar(x=trend_df["date"], y=rem_hrs, name="REM Sleep", marker_color="#4f46e5"))
+            fig_sleep_arch.add_trace(go.Bar(x=trend_df["date"], y=light_hrs, name="Light Sleep", marker_color="#818cf8"))
+            fig_sleep_arch.add_trace(go.Bar(x=trend_df["date"], y=awake_hrs, name="Awake Time", marker_color="#e4e4e7"))
+            fig_sleep_arch.add_trace(go.Scatter(x=trend_df["date"], y=total_sleep_hrs.rolling(7, min_periods=2).mean(), name="7d Avg Total", line=dict(color="#111827", width=2), mode="lines"))
+            fig_sleep_arch.add_hline(y=7, line_dash="dash", line_color="#10b981")
+
             fig_sleep_arch.update_layout(
                 template=plotly_template,
                 barmode="stack",
-                title="Overnight Sleep Architecture Breakdown",
+                title="Sleep Architecture and 7h Target",
                 yaxis=dict(title="Duration (Hours)", gridcolor=grid_color),
                 plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                height=300,
+                height=320,
                 margin=dict(l=40, r=40, t=40, b=30),
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
             )
@@ -649,40 +945,45 @@ with tab_trends:
 
         # Chart 3: Stress vs Body Battery
         fig_stress = go.Figure()
-        if "stress_avg" in df.columns and df["stress_avg"].notna().any():
+        if "stress_avg" in trend_df.columns and trend_df["stress_avg"].notna().any():
             fig_stress.add_trace(go.Scatter(
-                x=df["date"], y=df["stress_avg"],
+                x=trend_df["date"], y=trend_df["stress_avg"],
                 mode="lines+markers", name="Stress Avg",
-                line=dict(color="#f59e0b", width=2), # amber-500
+                line=dict(color="#f59e0b", width=2),
                 marker=dict(size=4)
             ))
-        if "bb_min" in df.columns and df["bb_min"].notna().any():
             fig_stress.add_trace(go.Scatter(
-                x=df["date"], y=df["bb_min"],
+                x=trend_df["date"], y=trend_df["stress_avg"].rolling(7, min_periods=2).mean(),
+                mode="lines", name="Stress 7d Avg",
+                line=dict(color="#b45309", width=2, dash="dot")
+            ))
+        if "bb_min" in trend_df.columns and trend_df["bb_min"].notna().any():
+            fig_stress.add_trace(go.Scatter(
+                x=trend_df["date"], y=trend_df["bb_min"],
                 mode="lines+markers", name="Body Battery Min",
-                line=dict(color="#10b981", width=2), # emerald-500
+                line=dict(color="#10b981", width=2),
                 marker=dict(size=4)
             ))
         fig_stress.update_layout(
             template=plotly_template,
+            title="Stress Load and Body Battery",
             hovermode="x unified",
             yaxis=dict(title="Score (0-100)", side="left", range=[0, 100], gridcolor=grid_color),
             plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
             height=300,
-            margin=dict(l=40, r=40, t=10, b=30),
+            margin=dict(l=40, r=40, t=40, b=30),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
         )
         st.plotly_chart(fig_stress, use_container_width=True)
 
         col_left, col_right = st.columns(2)
-        
         with col_left:
-            if "sleep_score" in df.columns and df["sleep_score"].notna().any():
+            if "sleep_score" in trend_df.columns and trend_df["sleep_score"].notna().any():
                 fig_sleep = go.Figure()
                 fig_sleep.add_trace(go.Bar(
-                    x=df["date"], y=df["sleep_score"],
+                    x=trend_df["date"], y=trend_df["sleep_score"],
                     name="Sleep Score",
-                    marker_color="#8b5cf6" # violet-500
+                    marker_color="#8b5cf6"
                 ))
                 fig_sleep.update_layout(
                     template=plotly_template,
@@ -695,17 +996,17 @@ with tab_trends:
                 st.plotly_chart(fig_sleep, use_container_width=True)
 
         with col_right:
-            if "steps" in df.columns and df["steps"].notna().any():
+            if "steps" in trend_df.columns and trend_df["steps"].notna().any():
                 fig_steps = go.Figure()
                 fig_steps.add_trace(go.Bar(
-                    x=df["date"], y=df["steps"],
+                    x=trend_df["date"], y=trend_df["steps"],
                     name="Steps",
-                    marker_color="#06b6d4" # cyan-500
+                    marker_color="#06b6d4"
                 ))
                 fig_steps.add_hline(y=8000, line_dash="dash", line_color="#f59e0b")
                 fig_steps.update_layout(
                     template=plotly_template,
-                    title="Daily Steps",
+                    title="Daily Steps and 8k Target",
                     yaxis=dict(gridcolor=grid_color),
                     plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
                     height=250,
@@ -714,17 +1015,24 @@ with tab_trends:
                 st.plotly_chart(fig_steps, use_container_width=True)
 
         # Pulse Ox & Respiration Chart
-        if "spo2_avg" in df.columns and df["spo2_avg"].notna().any():
+        if "spo2_avg" in trend_df.columns and trend_df["spo2_avg"].notna().any():
             fig_spo2 = go.Figure()
+            fig_spo2.add_hrect(y0=95, y1=100, fillcolor="rgba(16,185,129,0.08)", line_width=0)
             fig_spo2.add_trace(go.Scatter(
-                x=df["date"], y=df["spo2_avg"],
+                x=trend_df["date"], y=trend_df["spo2_avg"],
                 mode="lines+markers", name="Pulse Ox (SpO2 %)",
                 line=dict(color="#06b6d4", width=2),
                 marker=dict(size=4)
             ))
-            if "respiration_avg" in df.columns and df["respiration_avg"].notna().any():
+            if "spo2_min" in trend_df.columns and trend_df["spo2_min"].notna().any():
                 fig_spo2.add_trace(go.Scatter(
-                    x=df["date"], y=df["respiration_avg"],
+                    x=trend_df["date"], y=trend_df["spo2_min"],
+                    mode="markers", name="SpO2 Min",
+                    marker=dict(color="#ef4444", size=6)
+                ))
+            if "respiration_avg" in trend_df.columns and trend_df["respiration_avg"].notna().any():
+                fig_spo2.add_trace(go.Scatter(
+                    x=trend_df["date"], y=trend_df["respiration_avg"],
                     mode="lines+markers", name="Respiration (br/min)",
                     line=dict(color="#10b981", width=2),
                     marker=dict(size=4),
@@ -732,53 +1040,53 @@ with tab_trends:
                 ))
             fig_spo2.update_layout(
                 template=plotly_template,
-                title="Pulse Ox (SpO2) & Respiration rate",
+                title="Pulse Ox, Min SpO2, and Respiration Rate",
                 hovermode="x unified",
                 yaxis=dict(title="SpO2 (%)", side="left", range=[80, 100], gridcolor=grid_color),
                 yaxis2=dict(title="Breaths/min", overlaying="y", side="right", range=[10, 25], showgrid=False),
                 plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                height=280,
+                height=300,
                 margin=dict(l=40, r=40, t=40, b=30),
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
             )
             st.plotly_chart(fig_spo2, use_container_width=True)
 
-
-
         # Automated Correlation Discovery Panel
         st.markdown("<h3 style='font-size: 1.125rem; font-weight: 700; letter-spacing: -0.02em; margin-top: 24px; margin-bottom: 12px;'>Biometric Correlation Insights</h3>", unsafe_allow_html=True)
-        
-        # Pearson correlations calculator
+
         cols = ["hrv_last_night", "sleep_score", "resting_hr", "stress_avg", "steps", "training_readiness"]
-        available_cols = [c for c in cols if c in df.columns and df[c].notna().sum() > 5]
-        
+        available_cols = [c for c in cols if c in trend_df.columns and trend_df[c].notna().sum() > 5]
+
         insights = []
         if len(available_cols) >= 2:
-            corr_matrix = df[available_cols].corr()
-            
+            corr_matrix = trend_df[available_cols].corr()
             if "hrv_last_night" in corr_matrix.index and "stress_avg" in corr_matrix.columns:
                 val = corr_matrix.loc["hrv_last_night", "stress_avg"]
                 if val < -0.35:
-                    insights.append(f"Daytime stress averages and sleep recovery (HRV) are negatively correlated ({val:.2f}). Higher stress directly suppresses your sleep recovery.")
+                    insights.append(f"Daytime stress averages and sleep recovery (HRV) are negatively correlated ({val:.2f}). Higher stress may be suppressing recovery.")
             if "hrv_last_night" in corr_matrix.index and "sleep_score" in corr_matrix.columns:
                 val = corr_matrix.loc["hrv_last_night", "sleep_score"]
                 if val > 0.35:
-                    insights.append(f"Sleep score and overnight HRV show a positive correlation ({val:.2f}). Deep quality sleep directly charges autonomic recovery.")
+                    insights.append(f"Sleep score and overnight HRV show a positive correlation ({val:.2f}). Quality sleep appears to support autonomic recovery.")
             if "resting_hr" in corr_matrix.index and "hrv_last_night" in corr_matrix.columns:
                 val = corr_matrix.loc["resting_hr", "hrv_last_night"]
                 if val < -0.4:
-                    insights.append(f"Resting HR and HRV are strongly inversely linked ({val:.2f}). A lower waking heart rate signifies peak parasympathetic recovery.")
+                    insights.append(f"Resting HR and HRV are strongly inversely linked ({val:.2f}). Lower waking heart rate aligns with stronger parasympathetic recovery.")
             if "steps" in corr_matrix.index and "sleep_score" in corr_matrix.columns:
                 val = corr_matrix.loc["steps", "sleep_score"]
                 if val > 0.25:
-                    insights.append(f"Higher daily step counts show a positive relationship ({val:.2f}) with sleep quality score. Physical output helps you sleep deeper.")
-        
+                    insights.append(f"Higher step counts show a positive relationship ({val:.2f}) with sleep quality score in this range.")
+            if "training_readiness" in corr_matrix.index and "stress_avg" in corr_matrix.columns:
+                val = corr_matrix.loc["training_readiness", "stress_avg"]
+                if val < -0.35:
+                    insights.append(f"Training readiness falls as stress rises ({val:.2f}). Watch cumulative stress before harder sessions.")
+
         if not insights:
-            insights.append("Still gathering data to discover correlation insights. Keep logging consistency.")
-            
+            insights.append("Still gathering enough variation to discover reliable correlations. Keep logging consistently.")
+
         st.markdown(f"""
         <div class="shadcn-card" style="padding: 20px; gap: 8px; border-left: 4px solid var(--border);">
-            {"".join(f"<div style='font-size: 0.875rem; line-height: 1.5; padding: 4px 0;'>• {ins}</div>" for ins in insights)}
+            {''.join(f"<div style='font-size: 0.875rem; line-height: 1.5; padding: 4px 0;'>{ins}</div>" for ins in insights)}
         </div>
         """, unsafe_allow_html=True)
 
