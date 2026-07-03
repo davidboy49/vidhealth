@@ -16,6 +16,7 @@ def init_db():
         date TEXT PRIMARY KEY,
         hrv_last_night INTEGER,
         hrv_weekly_avg INTEGER,
+        hrv_status TEXT,
         sleep_score INTEGER,
         sleep_duration INTEGER,
         sleep_deep INTEGER,
@@ -32,6 +33,7 @@ def init_db():
         stress_avg INTEGER,
         stress_max INTEGER,
         steps INTEGER,
+        floors INTEGER,
         training_readiness INTEGER,
         spo2_avg REAL,
         spo2_min INTEGER,
@@ -58,17 +60,53 @@ def init_db():
 def save_day(date_str: str, raw_data: dict):
     """
     Parses Garmin raw data dictionary and updates/inserts it into the SQLite DB.
+    Uses the 'summary' endpoint as the primary source for consolidated metrics
+    (it has consistent field names), then falls back to individual endpoints.
     """
     init_db()
     
-    # Extract values safely
+    summary = raw_data.get("summary", {})
+    if isinstance(summary, dict):
+        # Summary has the most reliable, consolidated data
+        resting_hr = summary.get("restingHeartRate")
+        min_hr = summary.get("minHeartRate")
+        max_hr = summary.get("maxHeartRate")
+        stress_avg = summary.get("averageStressLevel")
+        stress_max = summary.get("maxStressLevel")
+        steps = summary.get("totalSteps")
+        spo2_avg = summary.get("averageSpo2")
+        spo2_min = summary.get("lowestSpo2")
+        respiration_avg = summary.get("avgWakingRespirationValue")
+        respiration_min = summary.get("lowestRespirationValue")
+        bb_max = summary.get("bodyBatteryHighestValue")
+        bb_min = summary.get("bodyBatteryLowestValue")
+        bb_charged = summary.get("bodyBatteryChargedValue")
+        bb_drained = summary.get("bodyBatteryDrainedValue")
+        training_readiness = summary.get("trainingReadiness")
+        floors = summary.get("floorsAscended")
+    else:
+        resting_hr = min_hr = max_hr = None
+        stress_avg = stress_max = None
+        steps = None
+        spo2_avg = spo2_min = None
+        respiration_avg = respiration_min = None
+        bb_max = bb_min = bb_charged = bb_drained = None
+        training_readiness = None
+        floors = None
+
+    # HRV — nested under hrv.hrvSummary
     hrv = raw_data.get("hrv", {})
     hrv_last_night = None
     hrv_weekly_avg = None
+    hrv_status = None
     if isinstance(hrv, dict):
-        hrv_last_night = hrv.get("lastNightAvg") or hrv.get("last_night_avg")
-        hrv_weekly_avg = hrv.get("weeklyAvg") or hrv.get("weekly_avg")
+        hrv_summary = hrv.get("hrvSummary", {})
+        if isinstance(hrv_summary, dict):
+            hrv_last_night = hrv_summary.get("lastNightAvg")
+            hrv_weekly_avg = hrv_summary.get("weeklyAvg")
+            hrv_status = hrv_summary.get("status")
 
+    # Sleep — dailySleepDTO has sleepTimeSeconds, not sleepTime
     sleep = raw_data.get("sleep", {})
     daily_sleep = sleep.get("dailySleepDTO", {}) if isinstance(sleep, dict) else {}
     sleep_score = None
@@ -80,71 +118,37 @@ def save_day(date_str: str, raw_data: dict):
     if isinstance(daily_sleep, dict):
         ss = daily_sleep.get("sleepScores", {})
         sleep_score = ss.get("overall", {}).get("value") if isinstance(ss, dict) else None
-        sleep_duration = daily_sleep.get("sleepTime")
+        sleep_duration = daily_sleep.get("sleepTimeSeconds")
         sleep_deep = daily_sleep.get("deepSleepSeconds")
         sleep_light = daily_sleep.get("lightSleepSeconds")
         sleep_rem = daily_sleep.get("remSleepSeconds")
         sleep_awake = daily_sleep.get("awakeSleepSeconds")
 
-    hr = raw_data.get("heart_rate", {})
-    resting_hr = None
-    min_hr = None
-    max_hr = None
-    if isinstance(hr, dict):
-        resting_hr = hr.get("restingHeartRate")
-        min_hr = hr.get("minHeartRate")
-        max_hr = hr.get("maxHeartRate")
+    # Steps — when it's a list of interval buckets, sum them
+    steps_data = raw_data.get("steps", [])
+    if steps is None:
+        if isinstance(steps_data, list):
+            steps = sum(item.get("steps", 0) for item in steps_data if isinstance(item, dict))
+        elif isinstance(steps_data, dict):
+            steps = steps_data.get("totalSteps")
+        elif isinstance(steps_data, (int, float)):
+            steps = int(steps_data)
 
-    bb_list = raw_data.get("body_battery", [])
-    bb_max = None
-    bb_min = None
-    bb_charged = None
-    bb_drained = None
-    if isinstance(bb_list, list) and len(bb_list) > 0:
-        bb = bb_list[0]
-        bb_max = bb.get("bodyBatteryMax") or bb.get("max")
-        bb_min = bb.get("bodyBatteryMin") or bb.get("min")
-        bb_charged = bb.get("charged")
-        bb_drained = bb.get("drained")
+    # HR fallback (if summary wasn't available)
+    if resting_hr is None:
+        hr = raw_data.get("heart_rate", {})
+        if isinstance(hr, dict):
+            resting_hr = hr.get("restingHeartRate")
+            min_hr = hr.get("minHeartRate")
+            max_hr = hr.get("maxHeartRate")
 
-    stress = raw_data.get("stress", {})
-    stress_avg = None
-    stress_max = None
-    if isinstance(stress, dict):
-        stress_avg = stress.get("avgStressLevel")
-        stress_max = stress.get("maxStressLevel")
-
-    steps_dict = raw_data.get("steps", {})
-    steps = None
-    if isinstance(steps_dict, dict):
-        steps = steps_dict.get("totalSteps")
-    elif isinstance(steps_dict, (int, float)):
-        steps = int(steps_dict)
-
-    tr = raw_data.get("training_readiness", {})
-    training_readiness = None
-    if isinstance(tr, dict):
-        rq = tr.get("readinessQualifier", {})
-        if isinstance(rq, dict):
-            training_readiness = rq.get("readinessScore")
-
-    # SpO2 (Pulse Ox) & Respiration parsing
-    # Typically in Garmin Connect:
-    # Pulse Ox is a list/dict structure. Let's parse average/min.
-    spo2_data = raw_data.get("pulse_ox", {})
-    spo2_avg = None
-    spo2_min = None
-    if isinstance(spo2_data, dict):
-        # Depending on API response, can be avgVal, minVal
-        spo2_avg = spo2_data.get("avgVal") or spo2_data.get("spo2Avg")
-        spo2_min = spo2_data.get("minVal") or spo2_data.get("spo2Min")
-        
-    resp_data = raw_data.get("respiration", {})
-    respiration_avg = None
-    respiration_min = None
-    if isinstance(resp_data, dict):
-        respiration_avg = resp_data.get("avgVal") or resp_data.get("avgRespirationRate")
-        respiration_min = resp_data.get("minVal") or resp_data.get("minRespirationRate")
+    # Training readiness fallback
+    if training_readiness is None:
+        tr = raw_data.get("training_readiness", {})
+        if isinstance(tr, dict):
+            rq = tr.get("readinessQualifier", {})
+            if isinstance(rq, dict):
+                training_readiness = rq.get("readinessScore")
 
     # Store raw json
     raw_json_str = json.dumps(raw_data, default=str)
@@ -153,14 +157,15 @@ def save_day(date_str: str, raw_data: dict):
     cursor = conn.cursor()
     cursor.execute("""
     INSERT INTO daily_metrics (
-        date, hrv_last_night, hrv_weekly_avg, sleep_score, sleep_duration,
+        date, hrv_last_night, hrv_weekly_avg, hrv_status, sleep_score, sleep_duration,
         sleep_deep, sleep_light, sleep_rem, sleep_awake, resting_hr, min_hr, max_hr,
-        bb_max, bb_min, bb_charged, bb_drained, stress_avg, stress_max, steps,
+        bb_max, bb_min, bb_charged, bb_drained, stress_avg, stress_max, steps, floors,
         training_readiness, spo2_avg, spo2_min, respiration_avg, respiration_min, raw_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(date) DO UPDATE SET
         hrv_last_night = excluded.hrv_last_night,
         hrv_weekly_avg = excluded.hrv_weekly_avg,
+        hrv_status = excluded.hrv_status,
         sleep_score = excluded.sleep_score,
         sleep_duration = excluded.sleep_duration,
         sleep_deep = excluded.sleep_deep,
@@ -177,6 +182,7 @@ def save_day(date_str: str, raw_data: dict):
         stress_avg = excluded.stress_avg,
         stress_max = excluded.stress_max,
         steps = excluded.steps,
+        floors = excluded.floors,
         training_readiness = excluded.training_readiness,
         spo2_avg = excluded.spo2_avg,
         spo2_min = excluded.spo2_min,
@@ -184,9 +190,9 @@ def save_day(date_str: str, raw_data: dict):
         respiration_min = excluded.respiration_min,
         raw_json = excluded.raw_json
     """, (
-        date_str, hrv_last_night, hrv_weekly_avg, sleep_score, sleep_duration,
+        date_str, hrv_last_night, hrv_weekly_avg, hrv_status, sleep_score, sleep_duration,
         sleep_deep, sleep_light, sleep_rem, sleep_awake, resting_hr, min_hr, max_hr,
-        bb_max, bb_min, bb_charged, bb_drained, stress_avg, stress_max, steps,
+        bb_max, bb_min, bb_charged, bb_drained, stress_avg, stress_max, steps, floors,
         training_readiness, spo2_avg, spo2_min, respiration_avg, respiration_min, raw_json_str
     ))
     conn.commit()

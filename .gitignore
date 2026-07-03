@@ -2,8 +2,12 @@
 .env
 .garmin_tokens/
 
-# SQLite Database
+# SQLite Databases
 health.db
+health_data.db
+
+# Raw daily JSON dumps (personal health data)
+data/*.json
 
 # Python bytecode
 __pycache__/
@@ -11,3 +15,10 @@ __pycache__/
 
 # Local data (excluding standard project directories)
 *.log
+
+# Temp scripts
+daily_report.py
+push_report.py
+query_report.py
+send_evening_nudge.py
+send_nudge.py

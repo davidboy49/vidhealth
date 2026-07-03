@@ -1,10 +1,19 @@
 import os
+import sys
+import io
 from pathlib import Path
 from datetime import date
+
 HAS_GENAI = True
 try:
+    # google.generativeai.__init__.py hard-codes a FutureWarning at import time
+    # that can't be suppressed via warnings.filterwarnings. Intercept stderr for it.
+    _stderr = sys.stderr
+    sys.stderr = io.StringIO()
     import google.generativeai as genai
+    sys.stderr = _stderr
 except ImportError:
+    sys.stderr = _stderr
     HAS_GENAI = False
 
 from dotenv import load_dotenv

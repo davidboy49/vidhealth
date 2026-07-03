@@ -1,0 +1,35 @@
+title: "David's Garmin Health Data"
+description: "Personal health metrics from Garmin Fenix 7X"
+allow_sql: false
+databases:
+  health:
+    queries:
+      latest_7:
+        sql: "SELECT date, hrv_last_night, hrv_status, sleep_score, sleep_duration, resting_hr, bb_max, bb_min, stress_avg, steps, floors FROM daily_metrics ORDER BY date DESC LIMIT 7"
+        title: "Last 7 Days"
+      trend_30:
+        sql: "SELECT date, hrv_last_night, resting_hr, stress_avg, steps, bb_max FROM daily_metrics ORDER BY date DESC LIMIT 30"
+        title: "30-Day Trend"
+      body_comp:
+        sql: "SELECT * FROM body_comp ORDER BY date DESC"
+        title: "Body Composition"
+    tables:
+      daily_metrics:
+        sortable_columns:
+          - date
+          - hrv_last_night
+          - sleep_score
+          - resting_hr
+          - stress_avg
+          - steps
+      body_comp:
+        sortable_columns:
+          - date
+          - weight
+          - body_fat
+          - waist
+plugins:
+  datasette-auth-passwords:
+    accounts:
+      - id: david
+        password: pbkdf2_sha256:b9a62f1dcf12ec90bc373cd66b36bd763f324ae2806ca9cff1278734534fe46c:5f561b4e8c9dc7f21a846d28e4268408:600000

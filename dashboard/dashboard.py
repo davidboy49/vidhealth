@@ -329,12 +329,13 @@ def make_sparkline(series, color):
     return fig
 
 # ---------- TABS (EMOJI-LESS PLAIN TEXT HEADERS) ----------
-tab_today, tab_trends, tab_comp, tab_ai, tab_recovery = st.tabs([
+tab_today, tab_trends, tab_comp, tab_ai, tab_recovery, tab_data = st.tabs([
     "Today", 
     "Trends", 
     "Body Comp",
     "AI Insights", 
-    "Recovery Forecast"
+    "Recovery Forecast",
+    "📊 Data"
 ])
 
 
@@ -1037,3 +1038,246 @@ with tab_recovery:
         showlegend=False
     )
     st.plotly_chart(fig_forecast, use_container_width=True)
+
+
+# ==================== TAB 6: DATA TABLE (POSTGRESQL-STYLE) ====================
+with tab_data:
+    st.markdown(f"<h3 style='font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 16px;'>📊 Health Data Explorer</h3>", unsafe_allow_html=True)
+    
+    col_filter, col_export = st.columns([8, 2])
+    
+    with col_filter:
+        search_term = st.text_input("", placeholder="Filter by any value...", label_visibility="collapsed")
+    
+    with col_export:
+        # Styled CSV download
+        csv_data = df.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            label="⬇ CSV",
+            data=csv_data,
+            file_name=f"vidhealth_export_{date.today().isoformat()}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+    
+    # Column selection toggles
+    st.markdown(f"<div style='font-size: 0.75rem; font-weight: 600; color: var(--muted-foreground); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px;'>Columns</div>", unsafe_allow_html=True)
+    
+    # Human-readable column labels
+    column_labels = {
+        "date": "Date", "hrv_last_night": "HRV (ms)", "hrv_weekly_avg": "HRV 7d Avg",
+        "hrv_status": "HRV Status", "sleep_score": "Sleep", "sleep_duration": "Sleep Dur",
+        "sleep_deep": "Deep Sleep", "sleep_light": "Light Sleep", "sleep_rem": "REM",
+        "sleep_awake": "Awake", "resting_hr": "RHR", "min_hr": "Min HR", "max_hr": "Max HR",
+        "bb_max": "BB Max", "bb_min": "BB Min", "bb_charged": "BB Charged", "bb_drained": "BB Drained",
+        "stress_avg": "Stress Avg", "stress_max": "Stress Max", "steps": "Steps",
+        "floors": "Floors", "training_readiness": "Readiness", "spo2_avg": "SpO2 Avg",
+        "spo2_min": "SpO2 Min", "respiration_avg": "Resp Avg", "respiration_min": "Resp Min",
+        "workout_type": "Workout", "alcohol_logged": "Alcohol", "sleep_apnea_flag": "Apnea"
+    }
+    
+    all_cols = [c for c in column_labels.keys() if c in df.columns]
+    
+    # Build columns in rows of 8
+    col_toggles = {}
+    toggle_cols = st.columns(8)
+    for i, col in enumerate(all_cols):
+        with toggle_cols[i % 8]:
+            label = column_labels.get(col, col)
+            # Default: show key metrics, hide technical fields
+            default_visible = col in ["date", "hrv_last_night", "sleep_score", "resting_hr", 
+                                       "stress_avg", "steps", "bb_max", "bb_min", 
+                                       "hrv_status", "training_readiness", "spo2_avg",
+                                       "sleep_duration", "workout_type"]
+            col_toggles[col] = st.checkbox(label, value=default_visible, key=f"col_{col}")
+    
+    st.markdown("<hr style='margin: 12px 0; border-color: var(--border);'>", unsafe_allow_html=True)
+    
+    # Build display dataframe
+    visible_cols = [c for c in all_cols if col_toggles.get(c, False)]
+    
+    if not visible_cols:
+        st.info("Select at least one column above.")
+    else:
+        display_df = df[visible_cols].copy()
+        
+        # Format values for readability
+        if "date" in display_df.columns:
+            display_df["date"] = pd.to_datetime(display_df["date"]).dt.strftime("%b %d, %Y")
+        if "sleep_duration" in display_df.columns:
+            display_df["sleep_duration"] = display_df["sleep_duration"].apply(
+                lambda x: f"{int(x//3600)}h {int((x%3600)//60)}m" if pd.notna(x) else "—"
+            )
+        if "alcohol_logged" in display_df.columns:
+            display_df["alcohol_logged"] = display_df["alcohol_logged"].map({1: "🍷 Yes", 0: "—"})
+        if "sleep_apnea_flag" in display_df.columns:
+            display_df["sleep_apnea_flag"] = display_df["sleep_apnea_flag"].map({1: "⚠ Detected", 0: "—"})
+        if "hrv_status" in display_df.columns:
+            display_df["hrv_status"] = display_df["hrv_status"].fillna("—")
+        if "workout_type" in display_df.columns:
+            display_df["workout_type"] = display_df["workout_type"].fillna("—")
+        
+        # Rename columns to human labels
+        display_df = display_df.rename(columns={k: column_labels.get(k, k) for k in display_df.columns})
+        
+        # Filter rows by search
+        if search_term:
+            mask = display_df.astype(str).apply(lambda row: row.str.contains(search_term, case=False, na=False)).any(axis=1)
+            display_df = display_df[mask]
+        
+        # --- Postgres-style table rendering ---
+        st.markdown(f"""
+        <style>
+        .pg-table-container {{
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+            margin-top: 8px;
+        }}
+        .pg-table-header {{
+            display: flex;
+            align-items: center;
+            padding: 10px 16px;
+            background-color: var(--muted);
+            border-bottom: 1px solid var(--border);
+            font-size: 0.75rem;
+            color: var(--muted-foreground);
+            gap: 8px;
+        }}
+        .pg-table-header svg {{
+            flex-shrink: 0;
+        }}
+        .pg-table {{
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.8125rem;
+            font-family: "SF Mono", "Consolas", "Liberation Mono", monospace;
+        }}
+        .pg-table thead {{
+            background-color: var(--muted);
+            border-bottom: 2px solid var(--border);
+        }}
+        .pg-table th {{
+            padding: 10px 14px;
+            text-align: left;
+            font-weight: 600;
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--muted-foreground);
+            border-right: 1px solid var(--border);
+            white-space: nowrap;
+            cursor: default;
+            position: sticky;
+            top: 0;
+            z-index: 2;
+        }}
+        .pg-table th:last-child {{
+            border-right: none;
+        }}
+        .pg-table td {{
+            padding: 8px 14px;
+            border-bottom: 1px solid var(--border);
+            border-right: 1px solid var(--border);
+            vertical-align: middle;
+            white-space: nowrap;
+        }}
+        .pg-table td:last-child {{
+            border-right: none;
+        }}
+        .pg-table tbody tr:hover {{
+            background-color: var(--muted);
+        }}
+        .pg-table tbody tr:nth-child(even) {{
+            background-color: color-mix(in srgb, var(--muted) 30%, transparent);
+        }}
+        .pg-table tbody tr:nth-child(even):hover {{
+            background-color: var(--muted);
+        }}
+        .pg-num {{
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+        }}
+        .pg-badge {{
+            display: inline-block;
+            padding: 1px 6px;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            font-weight: 600;
+        }}
+        .pg-badge-green {{ background-color: rgba(16, 185, 129, 0.15); color: #10b981; }}
+        .pg-badge-yellow {{ background-color: rgba(245, 158, 11, 0.15); color: #f59e0b; }}
+        .pg-badge-red {{ background-color: rgba(239, 68, 68, 0.15); color: #ef4444; }}
+        .pg-badge-blue {{ background-color: rgba(99, 102, 241, 0.15); color: #6366f1; }}
+        .pg-empty {{
+            color: var(--muted-foreground);
+            font-style: italic;
+        }}
+        .pg-footer {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 16px;
+            background-color: var(--muted);
+            border-top: 1px solid var(--border);
+            font-size: 0.75rem;
+            color: var(--muted-foreground);
+        }}
+        </style>
+        """, unsafe_allow_html=True)
+        
+        # Number of rows display
+        total_rows = len(df)
+        shown_rows = len(display_df)
+        
+        st.markdown(f"""
+        <div class="pg-table-container">
+            <div class="pg-table-header">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M3 15h18"/><path d="M9 3v18"/><path d="M15 3v18"/></svg>
+                daily_metrics <span style="color: var(--foreground); font-weight: 600;">{shown_rows}</span> row{"s" if shown_rows != 1 else ""}
+                {f'<span style="font-weight: 400;">(filtered from {total_rows})</span>' if search_term else ''}
+            </div>
+            <div style="overflow-x: auto; max-height: 520px; overflow-y: auto;">
+                <table class="pg-table">
+                    <thead>
+                        <tr>
+                            {"".join(f'<th>{col}</th>' for col in display_df.columns)}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {"".join(
+                            "<tr>" + "".join(
+                                f'<td class="pg-num">' + (
+                                    f'{val:.1f}' if isinstance(val, float) else str(val)
+                                ) + '</td>' if isinstance(val, (int, float)) and col not in ["Date", "HRV Status", "Workout", "Alcohol", "Apnea"]
+                                else f'<td>' + (
+                                    str(val)
+                                ) + '</td>'
+                                for col, val in row.items()
+                            ) + "</tr>"
+                            for _, row in display_df.iterrows()
+                        ) if not display_df.empty else '<tr><td colspan="99" style="text-align:center;padding:24px;color:var(--muted-foreground);">No matching records found</td></tr>'
+                        }
+                    </tbody>
+                </table>
+            </div>
+            <div class="pg-footer">
+                <span>VID Health · Garmin Fenix 7X</span>
+                <span>{shown_rows} row{"s" if shown_rows != 1 else ""}</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Summary stats bar
+        if not display_df.empty and "Steps" in display_df.columns:
+            total_steps = int(df["steps"].sum())
+            avg_hrv = df["hrv_last_night"].mean()
+            avg_sleep = df["sleep_score"].mean()
+            st.markdown(f"""
+            <div style="display: flex; gap: 24px; padding: 12px 16px; margin-top: 12px; background-color: var(--card); border: 1px solid var(--border); border-radius: 8px; font-size: 0.8125rem;">
+                <div><span style="color: var(--muted-foreground);">Total Steps:</span> <strong>{total_steps:,}</strong></div>
+                <div><span style="color: var(--muted-foreground);">Avg HRV:</span> <strong>{avg_hrv:.0f} ms</strong></div>
+                <div><span style="color: var(--muted-foreground);">Avg Sleep:</span> <strong>{avg_sleep:.0f}/100</strong></div>
+                <div><span style="color: var(--muted-foreground);">Days Tracked:</span> <strong>{len(df)}</strong></div>
+            </div>
+            """, unsafe_allow_html=True)
