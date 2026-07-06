@@ -5,8 +5,10 @@ from datetime import datetime, date
 
 DB_PATH = Path(__file__).parent / "health.db"
 
+
 def get_connection():
     return sqlite3.connect(DB_PATH)
+
 
 def init_db():
     conn = get_connection()
@@ -54,8 +56,24 @@ def init_db():
         waist REAL
     )
     """)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS ai_reports (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        report_type TEXT NOT NULL,
+        status TEXT NOT NULL,
+        generated_at TEXT NOT NULL,
+        start_date TEXT,
+        end_date TEXT,
+        source_row_count INTEGER,
+        provider TEXT,
+        model_name TEXT,
+        summary_text TEXT,
+        error_message TEXT
+    )
+    """)
     conn.commit()
     conn.close()
+
 
 def save_day(date_str: str, raw_data: dict):
     """
@@ -64,10 +82,9 @@ def save_day(date_str: str, raw_data: dict):
     (it has consistent field names), then falls back to individual endpoints.
     """
     init_db()
-    
+
     summary = raw_data.get("summary", {})
     if isinstance(summary, dict):
-        # Summary has the most reliable, consolidated data
         resting_hr = summary.get("restingHeartRate")
         min_hr = summary.get("minHeartRate")
         max_hr = summary.get("maxHeartRate")
@@ -94,7 +111,6 @@ def save_day(date_str: str, raw_data: dict):
         training_readiness = None
         floors = None
 
-    # HRV — nested under hrv.hrvSummary
     hrv = raw_data.get("hrv", {})
     hrv_last_night = None
     hrv_weekly_avg = None
@@ -106,7 +122,6 @@ def save_day(date_str: str, raw_data: dict):
             hrv_weekly_avg = hrv_summary.get("weeklyAvg")
             hrv_status = hrv_summary.get("status")
 
-    # Sleep — dailySleepDTO has sleepTimeSeconds, not sleepTime
     sleep = raw_data.get("sleep", {})
     daily_sleep = sleep.get("dailySleepDTO", {}) if isinstance(sleep, dict) else {}
     sleep_score = None
@@ -124,7 +139,6 @@ def save_day(date_str: str, raw_data: dict):
         sleep_rem = daily_sleep.get("remSleepSeconds")
         sleep_awake = daily_sleep.get("awakeSleepSeconds")
 
-    # Steps — when it's a list of interval buckets, sum them
     steps_data = raw_data.get("steps", [])
     if steps is None:
         if isinstance(steps_data, list):
@@ -134,7 +148,6 @@ def save_day(date_str: str, raw_data: dict):
         elif isinstance(steps_data, (int, float)):
             steps = int(steps_data)
 
-    # HR fallback (if summary wasn't available)
     if resting_hr is None:
         hr = raw_data.get("heart_rate", {})
         if isinstance(hr, dict):
@@ -142,7 +155,6 @@ def save_day(date_str: str, raw_data: dict):
             min_hr = hr.get("minHeartRate")
             max_hr = hr.get("maxHeartRate")
 
-    # Training readiness fallback
     if training_readiness is None:
         tr = raw_data.get("training_readiness", {})
         if isinstance(tr, dict):
@@ -150,7 +162,6 @@ def save_day(date_str: str, raw_data: dict):
             if isinstance(rq, dict):
                 training_readiness = rq.get("readinessScore")
 
-    # Store raw json
     raw_json_str = json.dumps(raw_data, default=str)
 
     conn = get_connection()
@@ -198,6 +209,7 @@ def save_day(date_str: str, raw_data: dict):
     conn.commit()
     conn.close()
 
+
 def get_df(limit: int | None = 30):
     """
     Loads daily metrics as a pandas DataFrame.
@@ -226,6 +238,7 @@ def get_df(limit: int | None = 30):
     conn.close()
     return df
 
+
 def update_custom_field(date_str: str, field_name: str, value):
     """
     Updates custom fields like workout_type, alcohol_logged, sleep_apnea_flag, etc.
@@ -234,7 +247,7 @@ def update_custom_field(date_str: str, field_name: str, value):
     valid_fields = {"workout_type", "alcohol_logged", "sleep_apnea_flag", "ai_summary"}
     if field_name not in valid_fields:
         raise ValueError(f"Invalid field: {field_name}")
-    
+
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(f"UPDATE daily_metrics SET {field_name} = ? WHERE date = ?", (value, date_str))
@@ -244,6 +257,113 @@ def update_custom_field(date_str: str, field_name: str, value):
         raise ValueError(f"No daily_metrics row found for date {date_str}")
     conn.commit()
     conn.close()
+
+
+def save_ai_report(
+    report_type: str,
+    status: str,
+    summary_text: str | None = None,
+    error_message: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    source_row_count: int | None = None,
+    provider: str | None = None,
+    model_name: str | None = None,
+    generated_at: str | None = None,
+):
+    """
+    Stores an AI report or generation failure as a standalone artifact.
+    """
+    init_db()
+    if generated_at is None:
+        generated_at = datetime.utcnow().isoformat(timespec="seconds")
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO ai_reports (
+            report_type, status, generated_at, start_date, end_date,
+            source_row_count, provider, model_name, summary_text, error_message
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            report_type,
+            status,
+            generated_at,
+            start_date,
+            end_date,
+            source_row_count,
+            provider,
+            model_name,
+            summary_text,
+            error_message,
+        ),
+    )
+    report_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return report_id
+
+
+def get_latest_ai_report(report_type: str | None = None, status: str | None = None):
+    """
+    Returns the latest AI report row as a dict, or None if no report exists.
+    """
+    init_db()
+    conn = get_connection()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    clauses = []
+    params = []
+    if report_type is not None:
+        clauses.append("report_type = ?")
+        params.append(report_type)
+    if status is not None:
+        clauses.append("status = ?")
+        params.append(status)
+
+    where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    cursor.execute(
+        f"""
+        SELECT * FROM ai_reports
+        {where_clause}
+        ORDER BY generated_at DESC, id DESC
+        LIMIT 1
+        """,
+        tuple(params),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_ai_reports(limit: int = 10, report_type: str | None = None):
+    """
+    Loads recent AI reports as a pandas DataFrame.
+    """
+    import pandas as pd
+
+    init_db()
+    conn = get_connection()
+    clauses = []
+    params = []
+    if report_type is not None:
+        clauses.append("report_type = ?")
+        params.append(report_type)
+    where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    query = f"""
+        SELECT * FROM ai_reports
+        {where_clause}
+        ORDER BY generated_at DESC, id DESC
+        LIMIT ?
+    """
+    params.append(int(limit))
+    df = pd.read_sql_query(query, conn, params=tuple(params))
+    conn.close()
+    return df
+
 
 def save_body_comp(date_str: str, weight: float, body_fat: float, waist: float):
     """
@@ -263,6 +383,7 @@ def save_body_comp(date_str: str, weight: float, body_fat: float, waist: float):
     conn.commit()
     conn.close()
 
+
 def get_body_comp_df(limit: int = 30):
     """
     Loads body composition metrics as a pandas DataFrame.
@@ -271,12 +392,13 @@ def get_body_comp_df(limit: int = 30):
     init_db()
     conn = get_connection()
     df = pd.read_sql_query(f"""
-        SELECT * FROM body_comp 
-        ORDER BY date ASC 
+        SELECT * FROM body_comp
+        ORDER BY date ASC
         LIMIT {limit}
     """, conn)
     conn.close()
     return df
+
 
 if __name__ == "__main__":
     init_db()

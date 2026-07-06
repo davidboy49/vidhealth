@@ -1193,13 +1193,40 @@ with tab_comp:
 with tab_ai:
     st.markdown(f"<h3 style='font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 12px; display: flex; align-items: center;'>{LUCIDE_SPARKLES} AI Coach Biometric Insights</h3>", unsafe_allow_html=True)
 
-    # Prefer the newly generated report in session state so the UI updates immediately.
-    saved_ai_summary = clean_text(latest_df.get("ai_summary"))
+    latest_success_report = db.get_latest_ai_report(report_type="weekly_summary", status="success")
+    latest_report_run = db.get_latest_ai_report(report_type="weekly_summary")
+
+    saved_ai_summary = clean_text((latest_success_report or {}).get("summary_text"))
     generated_ai_summary = clean_text(st.session_state.get("generated_ai_summary"))
     if saved_ai_summary and saved_ai_summary != generated_ai_summary:
         st.session_state["generated_ai_summary"] = saved_ai_summary
         generated_ai_summary = saved_ai_summary
     ai_summary = generated_ai_summary or saved_ai_summary
+
+    if latest_report_run:
+        run_status = str(latest_report_run.get("status", "unknown")).title()
+        run_window = "-"
+        if latest_report_run.get("start_date") and latest_report_run.get("end_date"):
+            run_window = f"{latest_report_run['start_date']} to {latest_report_run['end_date']}"
+        status_color = "#10b981" if latest_report_run.get("status") == "success" else "#ef4444"
+        st.markdown(f"""
+        <div class="shadcn-card" style="padding: 16px 20px; margin-bottom: 12px; border-left: 4px solid {status_color};">
+            <div style="display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
+                <div>
+                    <div style="font-size: 0.75rem; color: var(--muted-foreground); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">Latest Run</div>
+                    <div style="font-size: 0.95rem; font-weight: 600; margin-top: 4px;">{run_status}</div>
+                </div>
+                <div>
+                    <div style="font-size: 0.75rem; color: var(--muted-foreground); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">Generated</div>
+                    <div style="font-size: 0.95rem; font-weight: 600; margin-top: 4px;">{clean_text(latest_report_run.get('generated_at')) or '-'}</div>
+                </div>
+                <div>
+                    <div style="font-size: 0.75rem; color: var(--muted-foreground); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">Date Window</div>
+                    <div style="font-size: 0.95rem; font-weight: 600; margin-top: 4px;">{run_window}</div>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
 
     if ai_summary:
         with st.container(border=True):
@@ -1213,6 +1240,11 @@ with tab_ai:
             </p>
         </div>
         """, unsafe_allow_html=True)
+
+    if latest_report_run and latest_report_run.get("status") == "failed":
+        error_message = clean_text(latest_report_run.get("error_message"))
+        if error_message:
+            st.error(f"Latest AI Coach run failed: {error_message}")
 
     st.markdown("<div style='margin-bottom: 12px;'></div>", unsafe_allow_html=True)
     if st.button("Generate On-Demand AI Report"):
@@ -1231,6 +1263,27 @@ with tab_ai:
                     "AI Coach could not generate the report. "
                     f"Reason: {e}"
                 )
+
+    report_history_df = db.get_ai_reports(limit=6, report_type="weekly_summary")
+    if not report_history_df.empty:
+        history_df = report_history_df[["generated_at", "status", "start_date", "end_date", "provider", "model_name", "error_message"]].copy()
+        history_df["status"] = history_df["status"].str.title()
+        history_df["error_message"] = history_df["error_message"].fillna("").replace("", "-")
+        history_df["start_date"] = history_df["start_date"].fillna("-")
+        history_df["end_date"] = history_df["end_date"].fillna("-")
+        history_df["provider"] = history_df["provider"].fillna("-")
+        history_df["model_name"] = history_df["model_name"].fillna("-")
+        history_df = history_df.rename(columns={
+            "generated_at": "Generated",
+            "status": "Status",
+            "start_date": "Start",
+            "end_date": "End",
+            "provider": "Provider",
+            "model_name": "Model",
+            "error_message": "Error",
+        })
+        st.markdown("<h4 style='font-size: 1rem; font-weight: 700; letter-spacing: -0.01em; margin-top: 18px; margin-bottom: 10px;'>Recent AI Coach Runs</h4>", unsafe_allow_html=True)
+        st.dataframe(history_df, use_container_width=True, hide_index=True, height=230)
 
     st.markdown("---")
     

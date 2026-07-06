@@ -170,8 +170,9 @@ async def week_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
         
     latest = df.iloc[-1]
-    ai_summary = latest.get("ai_summary")
-    
+    latest_report = db.get_latest_ai_report(report_type="weekly_summary", status="success")
+    ai_summary = (latest_report or {}).get("summary_text") or latest.get("ai_summary")
+
     if not ai_summary:
         await update.message.reply_text(
             "📝 Weekly AI coaching summary not generated yet.\n"
