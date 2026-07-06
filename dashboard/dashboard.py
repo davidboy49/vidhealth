@@ -1186,13 +1186,13 @@ with tab_ai:
         
     st.markdown("<div style='margin-bottom: 12px;'></div>", unsafe_allow_html=True)
     if st.button("Generate On-Demand AI Report"):
-        with st.spinner("Gemini is compiling biometric analysis..."):
+        with st.spinner("AI Coach is compiling biometric analysis..."):
             try:
                 from ai_coach import generate_weekly_report
                 report = generate_weekly_report(days=7)
                 st.rerun()
             except Exception as e:
-                st.error(f"Error compiling Gemini report: {e}")
+                st.error(f"Error compiling AI coach report: {e}")
 
     st.markdown("---")
     
