@@ -1192,16 +1192,18 @@ with tab_comp:
 # ==================== TAB 4: AI INSIGHTS ====================
 with tab_ai:
     st.markdown(f"<h3 style='font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 12px; display: flex; align-items: center;'>{LUCIDE_SPARKLES} AI Coach Biometric Insights</h3>", unsafe_allow_html=True)
-    
-    # Weekly AI Summary Display
-    ai_summary = clean_text(latest_df.get("ai_summary"))
-    
+
+    # Prefer the newly generated report in session state so the UI updates immediately.
+    saved_ai_summary = clean_text(latest_df.get("ai_summary"))
+    generated_ai_summary = clean_text(st.session_state.get("generated_ai_summary"))
+    if saved_ai_summary and saved_ai_summary != generated_ai_summary:
+        st.session_state["generated_ai_summary"] = saved_ai_summary
+        generated_ai_summary = saved_ai_summary
+    ai_summary = generated_ai_summary or saved_ai_summary
+
     if ai_summary:
-        st.markdown(f"""
-        <div class="shadcn-card" style="padding: 24px; line-height: 1.6; font-size: 0.95rem;">
-            {ai_summary}
-        </div>
-        """, unsafe_allow_html=True)
+        with st.container(border=True):
+            st.markdown(ai_summary)
     else:
         st.markdown("""
         <div class="shadcn-card" style="padding: 24px;">
@@ -1211,14 +1213,16 @@ with tab_ai:
             </p>
         </div>
         """, unsafe_allow_html=True)
-        
+
     st.markdown("<div style='margin-bottom: 12px;'></div>", unsafe_allow_html=True)
     if st.button("Generate On-Demand AI Report"):
         with st.spinner("AI Coach is compiling biometric analysis..."):
             try:
                 from ai_coach import generate_weekly_report
                 report = generate_weekly_report(days=7)
-                if clean_text(report):
+                cleaned_report = clean_text(report)
+                if cleaned_report:
+                    st.session_state["generated_ai_summary"] = cleaned_report
                     st.rerun()
                 else:
                     st.error("AI Coach finished, but the generated report was empty. No summary was saved.")

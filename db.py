@@ -238,6 +238,10 @@ def update_custom_field(date_str: str, field_name: str, value):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(f"UPDATE daily_metrics SET {field_name} = ? WHERE date = ?", (value, date_str))
+    if cursor.rowcount == 0:
+        conn.rollback()
+        conn.close()
+        raise ValueError(f"No daily_metrics row found for date {date_str}")
     conn.commit()
     conn.close()
 
