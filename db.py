@@ -201,18 +201,27 @@ def save_day(date_str: str, raw_data: dict):
 def get_df(limit: int | None = 30):
     """
     Loads daily metrics as a pandas DataFrame.
+    When a limit is provided, fetch the newest rows and return them oldest-to-newest.
     """
     import pandas as pd
     init_db()
     conn = get_connection()
-    query = """
-        SELECT * FROM daily_metrics
-        ORDER BY date ASC
-    """
-    params = ()
     if limit is not None:
-        query += " LIMIT ?"
+        query = """
+            SELECT * FROM (
+                SELECT * FROM daily_metrics
+                ORDER BY date DESC
+                LIMIT ?
+            )
+            ORDER BY date ASC
+        """
         params = (int(limit),)
+    else:
+        query = """
+            SELECT * FROM daily_metrics
+            ORDER BY date ASC
+        """
+        params = ()
     df = pd.read_sql_query(query, conn, params=params)
     conn.close()
     return df

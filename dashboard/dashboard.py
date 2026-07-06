@@ -332,6 +332,34 @@ def make_sparkline(series, color):
     )
     return fig
 
+
+def is_available(value):
+    return value is not None and pd.notna(value)
+
+
+def format_int(value, missing="-"):
+    if not is_available(value):
+        return missing
+    try:
+        return str(int(float(value)))
+    except (TypeError, ValueError):
+        return missing
+
+
+def format_float(value, digits=1, missing="-"):
+    if not is_available(value):
+        return missing
+    try:
+        return f"{float(value):.{digits}f}"
+    except (TypeError, ValueError):
+        return missing
+
+
+def clean_text(value):
+    if not is_available(value):
+        return ""
+    text = str(value).strip()
+    return "" if text.lower() in {"nan", "none", "nat", "<na>"} else text
 # ---------- TABS (EMOJI-LESS PLAIN TEXT HEADERS) ----------
 tab_today, tab_trends, tab_comp, tab_ai, tab_recovery, tab_data = st.tabs([
     "Today", 
@@ -1163,10 +1191,10 @@ with tab_comp:
 
 # ==================== TAB 4: AI INSIGHTS ====================
 with tab_ai:
-    st.markdown(f"<h3 style='font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 12px; display: flex; align-items: center;'>{LUCIDE_SPARKLES} Gemini AI Biometric Insights</h3>", unsafe_allow_html=True)
+    st.markdown(f"<h3 style='font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 12px; display: flex; align-items: center;'>{LUCIDE_SPARKLES} AI Coach Biometric Insights</h3>", unsafe_allow_html=True)
     
     # Weekly AI Summary Display
-    ai_summary = latest_df.get("ai_summary")
+    ai_summary = clean_text(latest_df.get("ai_summary"))
     
     if ai_summary:
         st.markdown(f"""
@@ -1190,9 +1218,15 @@ with tab_ai:
             try:
                 from ai_coach import generate_weekly_report
                 report = generate_weekly_report(days=7)
-                st.rerun()
+                if clean_text(report):
+                    st.rerun()
+                else:
+                    st.error("AI Coach finished, but the generated report was empty. No summary was saved.")
             except Exception as e:
-                st.error(f"Error compiling AI coach report: {e}")
+                st.error(
+                    "AI Coach could not generate the report. "
+                    f"Reason: {e}"
+                )
 
     st.markdown("---")
     

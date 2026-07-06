@@ -1,3 +1,4 @@
+import math
 import os
 from pathlib import Path
 from datetime import date
@@ -10,7 +11,7 @@ load_dotenv(Path(__file__).parent / ".env")
 
 import db
 
-# Configure DeepSeek
+# Configure AI Coach provider
 api_key = os.environ.get("DEEPSEEK_API_KEY")
 client = OpenAI(
     api_key=api_key,
@@ -18,12 +19,39 @@ client = OpenAI(
 ) if api_key else None
 
 
-def _safe_round(value, digits=1):
-    """Round a numeric value defensively, passing through None/non-numeric as-is."""
+class AIReportGenerationError(RuntimeError):
+    """Raised when the AI coach cannot generate or save a report."""
+
+def _is_missing(value) -> bool:
+    if value is None:
+        return True
     try:
-        return round(float(value), digits)
+        return math.isnan(float(value))
     except (TypeError, ValueError):
-        return value
+        return str(value).strip().lower() in {"", "nan", "none", "nat", "<na>"}
+
+
+def _format_metric(value, fallback="unavailable"):
+    if _is_missing(value):
+        return fallback
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if numeric.is_integer():
+        return str(int(numeric))
+    return f"{numeric:.1f}".rstrip("0").rstrip(".")
+
+
+def _safe_round(value, digits=1):
+    """Round a numeric value defensively, returning None for missing/non-finite values."""
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(numeric) or math.isinf(numeric):
+        return None
+    return round(numeric, digits)
 
 
 def _rolling_avg(df, col, window):
@@ -49,27 +77,27 @@ def _build_metrics_block(df, include_extended: bool = True) -> str:
         if include_extended:
             day_info = (
                 f"Date: {row['date']}\n"
-                f"  HRV (Last Night): {row['hrv_last_night']} ms (Weekly Avg: {row['hrv_weekly_avg']} ms)\n"
-                f"  Sleep Score: {row['sleep_score']}/100 (Duration: {row['sleep_duration'] or 0} s, "
-                f"Deep: {row['sleep_deep'] or 0} s, REM: {row['sleep_rem'] or 0} s)\n"
-                f"  Heart Rate: Resting: {row['resting_hr']} bpm, Min: {row['min_hr']} bpm, Max: {row['max_hr']} bpm\n"
-                f"  Body Battery: Max: {row['bb_max']}, Min: {row['bb_min']}, Charged: {row['bb_charged']}, "
-                f"Drained: {row['bb_drained']}\n"
-                f"  Stress Level: Avg: {row['stress_avg']}/100, Max: {row['stress_max']}/100\n"
-                f"  Steps: {row['steps']}\n"
-                f"  Training Readiness: {row['training_readiness']}/100\n"
-                f"  SpO2: Avg: {row['spo2_avg']}%, Min: {row['spo2_min']}%\n"
-                f"  Respiration Rate: Avg: {row['respiration_avg']} breaths/min\n"
+                f"  HRV (Last Night): {_format_metric(row.get('hrv_last_night'))} ms (Weekly Avg: {_format_metric(row.get('hrv_weekly_avg'))} ms)\n"
+                f"  Sleep Score: {_format_metric(row.get('sleep_score'))}/100 (Duration: {_format_metric(row.get('sleep_duration'), '0')} s, "
+                f"Deep: {_format_metric(row.get('sleep_deep'), '0')} s, REM: {_format_metric(row.get('sleep_rem'), '0')} s)\n"
+                f"  Heart Rate: Resting: {_format_metric(row.get('resting_hr'))} bpm, Min: {_format_metric(row.get('min_hr'))} bpm, Max: {_format_metric(row.get('max_hr'))} bpm\n"
+                f"  Body Battery: Max: {_format_metric(row.get('bb_max'))}, Min: {_format_metric(row.get('bb_min'))}, Charged: {_format_metric(row.get('bb_charged'))}, "
+                f"Drained: {_format_metric(row.get('bb_drained'))}\n"
+                f"  Stress Level: Avg: {_format_metric(row.get('stress_avg'))}/100, Max: {_format_metric(row.get('stress_max'))}/100\n"
+                f"  Steps: {_format_metric(row.get('steps'))}\n"
+                f"  Training Readiness: {_format_metric(row.get('training_readiness'))}/100\n"
+                f"  SpO2: Avg: {_format_metric(row.get('spo2_avg'))}%, Min: {_format_metric(row.get('spo2_min'))}%\n"
+                f"  Respiration Rate: Avg: {_format_metric(row.get('respiration_avg'))} breaths/min\n"
                 f"--------------------------------------------------"
             )
         else:
             day_info = (
                 f"Date: {row['date']}\n"
-                f"  HRV: {row['hrv_last_night']} ms (Weekly Avg: {row['hrv_weekly_avg']} ms)\n"
-                f"  Sleep Score: {row['sleep_score']}/100\n"
-                f"  Resting HR: {row['resting_hr']} bpm\n"
-                f"  Stress Level: Avg: {row['stress_avg']}/100\n"
-                f"  Training Readiness: {row['training_readiness']}/100\n"
+                f"  HRV: {_format_metric(row.get('hrv_last_night'))} ms (Weekly Avg: {_format_metric(row.get('hrv_weekly_avg'))} ms)\n"
+                f"  Sleep Score: {_format_metric(row.get('sleep_score'))}/100\n"
+                f"  Resting HR: {_format_metric(row.get('resting_hr'))} bpm\n"
+                f"  Stress Level: Avg: {_format_metric(row.get('stress_avg'))}/100\n"
+                f"  Training Readiness: {_format_metric(row.get('training_readiness'))}/100\n"
                 f"--------------------------------------------------"
             )
         day_lines.append(day_info)
@@ -93,7 +121,7 @@ def _build_metrics_block(df, include_extended: bool = True) -> str:
 
 def generate_weekly_report(days: int = 7) -> str:
     """
-    Fetches the last N days of data from the database, sends it to DeepSeek,
+    Fetches the last N days of data from the database, sends it to the AI Coach model,
     generates a health report, saves it in the database for the latest day, and returns it.
     """
     if not client:
@@ -167,20 +195,36 @@ Structure your response in clean markdown with these sections:
 Do not output HTML, only clean Markdown.
 """
 
-    # Call DeepSeek API
-    response = client.chat.completions.create(
-        model="deepseek-chat",
-        messages=[
-            {"role": "user", "content": prompt.strip()}
-        ],
-        temperature=0.3,
-        max_tokens=2048,
-    )
+    try:
+        response = client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[
+                {"role": "user", "content": prompt.strip()}
+            ],
+            temperature=0.3,
+            max_tokens=2048,
+        )
+    except Exception as e:
+        raise AIReportGenerationError(
+            f"AI Coach model request failed before a report was generated. Reason: {e}"
+        ) from e
 
-    report_text = response.choices[0].message.content.strip()
+    try:
+        report_text = response.choices[0].message.content.strip()
+    except (AttributeError, IndexError, TypeError) as e:
+        raise AIReportGenerationError(
+            "AI Coach returned an unexpected response format, so no report text could be read."
+        ) from e
 
-    # Save the report text in the database for the latest date
-    db.update_custom_field(latest_date_str, "ai_summary", report_text)
+    if not report_text:
+        raise AIReportGenerationError("AI Coach returned an empty report.")
+
+    try:
+        db.update_custom_field(latest_date_str, "ai_summary", report_text)
+    except Exception as e:
+        raise AIReportGenerationError(
+            f"AI Coach generated a report, but saving it for {latest_date_str} failed. Reason: {e}"
+        ) from e
 
     return report_text
 
@@ -242,7 +286,7 @@ No headers, no markdown bold symbols (*), just 3 clean sentences.
 
 
 if __name__ == "__main__":
-    print("Generating report using DeepSeek...")
+    print("Generating report using AI Coach...")
     try:
         report = generate_weekly_report(days=7)
         print("\n=== GENERATED REPORT ===\n")
