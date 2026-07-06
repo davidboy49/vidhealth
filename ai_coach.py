@@ -1,20 +1,7 @@
 import os
-import sys
-import io
 from pathlib import Path
 from datetime import date
-
-HAS_GENAI = True
-try:
-    # google.generativeai.__init__.py hard-codes a FutureWarning at import time
-    # that can't be suppressed via warnings.filterwarnings. Intercept stderr for it.
-    _stderr = sys.stderr
-    sys.stderr = io.StringIO()
-    import google.generativeai as genai
-    sys.stderr = _stderr
-except ImportError:
-    sys.stderr = _stderr
-    HAS_GENAI = False
+from openai import OpenAI
 
 from dotenv import load_dotenv
 
@@ -23,10 +10,12 @@ load_dotenv(Path(__file__).parent / ".env")
 
 import db
 
-# Configure Gemini
-api_key = os.environ.get("GEMINI_API_KEY")
-if api_key and HAS_GENAI:
-    genai.configure(api_key=api_key)
+# Configure DeepSeek
+api_key = os.environ.get("DEEPSEEK_API_KEY")
+client = OpenAI(
+    api_key=api_key,
+    base_url="https://api.deepseek.com/v1",
+) if api_key else None
 
 
 def _safe_round(value, digits=1):
@@ -104,16 +93,13 @@ def _build_metrics_block(df, include_extended: bool = True) -> str:
 
 def generate_weekly_report(days: int = 7) -> str:
     """
-    Fetches the last N days of data from the database, sends it to Gemini,
+    Fetches the last N days of data from the database, sends it to DeepSeek,
     generates a health report, saves it in the database for the latest day, and returns it.
     """
-    if not HAS_GENAI:
-        raise ImportError(
-            "The 'google-generativeai' package is not installed in this Python environment. "
-            "Please run 'pip install -r requirements.txt' on your server."
-        )
+    if not client:
+        raise ValueError("DEEPSEEK_API_KEY environment variable not found in .env")
     if not api_key:
-        raise ValueError("GEMINI_API_KEY environment variable not found in .env")
+        raise ValueError("DEEPSEEK_API_KEY environment variable not found in .env")
 
     df = db.get_df(limit=days)
     if df.empty:
@@ -125,7 +111,7 @@ def generate_weekly_report(days: int = 7) -> str:
 
     metrics_block, trend_block = _build_metrics_block(df, include_extended=True)
 
-    prompt = f"""
+    prompt = f"""\
 You are analyzing {days} days of Garmin biometric data for one user. Your job is to identify
 real, data-supported patterns and give proportionate guidance — not to write an
 alarming or padded wellness report.
@@ -181,12 +167,17 @@ Structure your response in clean markdown with these sections:
 Do not output HTML, only clean Markdown.
 """
 
-    # Call Gemini API
-    # Use gemini-2.5-flash as default stable model in this environment
-    model = genai.GenerativeModel("gemini-2.5-flash")
-    response = model.generate_content(prompt)
+    # Call DeepSeek API
+    response = client.chat.completions.create(
+        model="deepseek-chat",
+        messages=[
+            {"role": "user", "content": prompt.strip()}
+        ],
+        temperature=0.3,
+        max_tokens=2048,
+    )
 
-    report_text = response.text
+    report_text = response.choices[0].message.content.strip()
 
     # Save the report text in the database for the latest date
     db.update_custom_field(latest_date_str, "ai_summary", report_text)
@@ -198,13 +189,10 @@ def generate_morning_briefing(days: int = 3) -> str:
     """
     Generates a concise, 3-sentence daily coach briefing for the Telegram push.
     """
-    if not HAS_GENAI:
-        raise ImportError(
-            "The 'google-generativeai' package is not installed in this Python environment. "
-            "Please run 'pip install -r requirements.txt' on your server."
-        )
+    if not client:
+        raise ValueError("DEEPSEEK_API_KEY environment variable not found in .env")
     if not api_key:
-        raise ValueError("GEMINI_API_KEY environment variable not found in .env")
+        raise ValueError("DEEPSEEK_API_KEY environment variable not found in .env")
 
     df = db.get_df(limit=days)
     if df.empty:
@@ -212,7 +200,7 @@ def generate_morning_briefing(days: int = 3) -> str:
 
     metrics_block, trend_block = _build_metrics_block(df, include_extended=False)
 
-    prompt = f"""
+    prompt = f"""\
 You are a sports science coach reviewing a user's last {days} days of biometrics to
 write one text-message-length morning brief.
 
@@ -242,13 +230,19 @@ Write exactly 3 sentences, like a text from a smart coach:
 No headers, no markdown bold symbols (*), just 3 clean sentences.
 """
 
-    model = genai.GenerativeModel("gemini-2.5-flash")
-    response = model.generate_content(prompt)
-    return response.text.strip()
+    response = client.chat.completions.create(
+        model="deepseek-chat",
+        messages=[
+            {"role": "user", "content": prompt.strip()}
+        ],
+        temperature=0.3,
+        max_tokens=512,
+    )
+    return response.choices[0].message.content.strip()
 
 
 if __name__ == "__main__":
-    print("Generating report using Gemini...")
+    print("Generating report using DeepSeek...")
     try:
         report = generate_weekly_report(days=7)
         print("\n=== GENERATED REPORT ===\n")
