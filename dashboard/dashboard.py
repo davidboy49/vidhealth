@@ -332,6 +332,34 @@ def make_sparkline(series, color):
     )
     return fig
 
+
+def is_available(value):
+    return value is not None and pd.notna(value)
+
+
+def format_int(value, missing="-"):
+    if not is_available(value):
+        return missing
+    try:
+        return str(int(float(value)))
+    except (TypeError, ValueError):
+        return missing
+
+
+def format_float(value, digits=1, missing="-"):
+    if not is_available(value):
+        return missing
+    try:
+        return f"{float(value):.{digits}f}"
+    except (TypeError, ValueError):
+        return missing
+
+
+def clean_text(value):
+    if not is_available(value):
+        return ""
+    text = str(value).strip()
+    return "" if text.lower() in {"nan", "none", "nat", "<na>"} else text
 # ---------- TABS (EMOJI-LESS PLAIN TEXT HEADERS) ----------
 tab_today, tab_trends, tab_comp, tab_ai, tab_recovery, tab_data = st.tabs([
     "Today", 
@@ -1163,17 +1191,19 @@ with tab_comp:
 
 # ==================== TAB 4: AI INSIGHTS ====================
 with tab_ai:
-    st.markdown(f"<h3 style='font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 12px; display: flex; align-items: center;'>{LUCIDE_SPARKLES} Gemini AI Biometric Insights</h3>", unsafe_allow_html=True)
-    
-    # Weekly AI Summary Display
-    ai_summary = latest_df.get("ai_summary")
-    
+    st.markdown(f"<h3 style='font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 12px; display: flex; align-items: center;'>{LUCIDE_SPARKLES} AI Coach Biometric Insights</h3>", unsafe_allow_html=True)
+
+    # Prefer the newly generated report in session state so the UI updates immediately.
+    saved_ai_summary = clean_text(latest_df.get("ai_summary"))
+    generated_ai_summary = clean_text(st.session_state.get("generated_ai_summary"))
+    if saved_ai_summary and saved_ai_summary != generated_ai_summary:
+        st.session_state["generated_ai_summary"] = saved_ai_summary
+        generated_ai_summary = saved_ai_summary
+    ai_summary = generated_ai_summary or saved_ai_summary
+
     if ai_summary:
-        st.markdown(f"""
-        <div class="shadcn-card" style="padding: 24px; line-height: 1.6; font-size: 0.95rem;">
-            {ai_summary}
-        </div>
-        """, unsafe_allow_html=True)
+        with st.container(border=True):
+            st.markdown(ai_summary)
     else:
         st.markdown("""
         <div class="shadcn-card" style="padding: 24px;">
@@ -1183,16 +1213,24 @@ with tab_ai:
             </p>
         </div>
         """, unsafe_allow_html=True)
-        
+
     st.markdown("<div style='margin-bottom: 12px;'></div>", unsafe_allow_html=True)
     if st.button("Generate On-Demand AI Report"):
         with st.spinner("AI Coach is compiling biometric analysis..."):
             try:
                 from ai_coach import generate_weekly_report
                 report = generate_weekly_report(days=7)
-                st.rerun()
+                cleaned_report = clean_text(report)
+                if cleaned_report:
+                    st.session_state["generated_ai_summary"] = cleaned_report
+                    st.rerun()
+                else:
+                    st.error("AI Coach finished, but the generated report was empty. No summary was saved.")
             except Exception as e:
-                st.error(f"Error compiling AI coach report: {e}")
+                st.error(
+                    "AI Coach could not generate the report. "
+                    f"Reason: {e}"
+                )
 
     st.markdown("---")
     

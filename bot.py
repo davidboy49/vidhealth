@@ -184,7 +184,7 @@ async def week_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for chunk in [ai_summary[i:i+4000] for i in range(0, len(ai_summary), 4000)]:
             await update.message.reply_text(chunk, parse_mode="Markdown")
     else:
-        await update.message.reply_text(f"📝 **Gemini AI Weekly Coaching Report**\n\n{ai_summary}", parse_mode="Markdown")
+        await update.message.reply_text(f"📝 **AI Coach Weekly Coaching Report**\n\n{ai_summary}", parse_mode="Markdown")
 
 async def recover_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_auth(update, context):
@@ -269,7 +269,7 @@ async def send_daily_push():
         
     latest = df.iloc[-1]
     
-    # Generate narrative morning briefing using Gemini
+    # Generate narrative morning briefing using AI Coach
     import ai_coach
     try:
         briefing = ai_coach.generate_morning_briefing(days=3)
