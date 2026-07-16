@@ -113,18 +113,53 @@ def sync_date(api, target_date: str) -> dict:
     
     return result
 
-def save_result(target_date: str, data: dict):
+def save_result(target_date: str, data: dict) -> Path:
     # Save raw JSON backup
     out_path = DATA_DIR / f"{target_date}.json"
-    with open(out_path, "w") as f:
+    with open(out_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, default=str)
-    
-    # Save to SQLite DB
-    try:
-        db.save_day(target_date, data)
-        print(f"[OK] {target_date} - saved to DB")
-    except Exception as e:
-        print(f"[FAIL] {target_date} - DB error: {e}")
+
+    # Save to SQLite DB. Let failures propagate so callers never report a false success.
+    db.save_day(target_date, data)
+    print(f"[OK] {target_date} - saved to DB")
+    return out_path
+
+
+def sync_latest(target_date: str | None = None) -> dict:
+    """
+    Fetch and persist the latest Garmin data.
+
+    Garmin endpoints are independent, so partial results are saved while endpoint
+    failures are returned as warnings for dashboard and command-line feedback.
+    """
+    api = get_api()
+    date_str = target_date or date.today().isoformat()
+    print(f"[SYNC] Syncing {date_str}...")
+
+    data = sync_date(api, date_str)
+    synced_sources = sorted(
+        key for key, value in data.items()
+        if key != "date" and not key.endswith("_error") and value
+    )
+    warnings = {
+        key.removesuffix("_error"): value
+        for key, value in data.items()
+        if key.endswith("_error")
+    }
+
+    if not synced_sources:
+        detail = next(iter(warnings.values()), "Garmin returned no data.")
+        raise RuntimeError(f"No Garmin metrics were available for {date_str}. {detail}")
+
+    backup_path = save_result(date_str, data)
+    print(f"[OK] {date_str} - completed sync")
+    return {
+        "date": date_str,
+        "sources": synced_sources,
+        "warning_count": len(warnings),
+        "warnings": warnings,
+        "backup_path": str(backup_path),
+    }
 
 def backfill(days: int = 14):
     """Backfill the last N days of data."""
@@ -156,14 +191,9 @@ def backfill(days: int = 14):
         time.sleep(1)  # rate limit safety
     print(f"\n[DONE] Synced {days} days")
 
-def sync_today():
+def sync_today() -> dict:
     """Sync just today (for cron use)."""
-    api = get_api()
-    d = date.today().isoformat()
-    print(f"[SYNC] Syncing {d}...")
-    data = sync_date(api, d)
-    save_result(d, data)
-    print(f"[OK] {d} - completed sync")
+    return sync_latest()
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "backfill":

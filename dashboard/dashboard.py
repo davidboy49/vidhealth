@@ -270,7 +270,7 @@ if db_path.exists():
     last_sync_str = datetime.fromtimestamp(mtime).strftime("%b %d, %H:%M")
 
 # Header Row (now inherits correct variables)
-cols_header = st.columns([9, 1])
+cols_header = st.columns([7, 1.5, 1])
 with cols_header[0]:
     st.markdown(f"""
         <div style="margin-bottom: 20px;">
@@ -281,10 +281,47 @@ with cols_header[0]:
         </div>
     """, unsafe_allow_html=True)
 with cols_header[1]:
-    if st.button("☀️ Light" if st.session_state.theme == "dark" else "🌙 Dark"):
+    sync_clicked = st.button(
+        "Sync Garmin",
+        type="primary",
+        use_container_width=True,
+        help="Fetch today's latest Garmin metrics and update the dashboard.",
+    )
+with cols_header[2]:
+    if st.button(
+        "Light" if st.session_state.theme == "dark" else "Dark",
+        use_container_width=True,
+        help="Switch dashboard theme.",
+    ):
         st.session_state.theme = "light" if st.session_state.theme == "dark" else "dark"
         st.rerun()
 
+sync_error = None
+if sync_clicked:
+    try:
+        with st.spinner("Syncing Garmin data..."):
+            from sync import sync_latest
+
+            sync_result = sync_latest()
+        st.session_state["garmin_sync_notice"] = sync_result
+        st.rerun()
+    except ValueError as exc:
+        sync_error = str(exc)
+    except Exception as exc:
+        sync_error = f"Garmin sync failed: {exc}"
+
+if sync_error:
+    st.error(sync_error)
+
+sync_notice = st.session_state.pop("garmin_sync_notice", None)
+if sync_notice:
+    source_count = len(sync_notice["sources"])
+    warning_count = sync_notice["warning_count"]
+    warning_suffix = f" ({warning_count} endpoint warnings)" if warning_count else ""
+    st.success(
+        f"Garmin data synced for {sync_notice['date']} from "
+        f"{source_count} data sources{warning_suffix}."
+    )
 # ---------- INITIAL LOADING SCREEN ----------
 loader = st.empty()
 with loader.container():
