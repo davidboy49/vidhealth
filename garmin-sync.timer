@@ -1,0 +1,11 @@
+[Unit]
+Description=Sync VID Health Garmin data every three hours
+
+[Timer]
+OnCalendar=*-*-* 06,09,12,15,18,21:05:00 Asia/Bangkok
+Persistent=true
+RandomizedDelaySec=5m
+Unit=garmin-sync.service
+
+[Install]
+WantedBy=timers.target

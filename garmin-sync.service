@@ -1,0 +1,11 @@
+[Unit]
+Description=VID Health Garmin data sync
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/root/garmin-health/.env
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/garmin-health
+ExecStart=/usr/local/lib/hermes-agent/venv/bin/python sync.py today
