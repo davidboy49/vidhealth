@@ -344,7 +344,12 @@ if df.empty:
 
 # Ensure chronological order and get latest row
 latest_df = df.iloc[-1]
-latest_date = latest_df["date"]
+latest_timestamp = pd.to_datetime(latest_df["date"], errors="coerce")
+if pd.isna(latest_timestamp):
+    loader.empty()
+    st.error("The newest Garmin record has an invalid date and cannot be displayed.")
+    st.stop()
+latest_date = latest_timestamp.strftime("%Y-%m-%d")
 
 # Clear initial loading screen once data is successfully parsed
 loader.empty()
@@ -543,7 +548,7 @@ with tab_today:
                 computed_readiness -= (stress_val - 35) * 0.4
             computed_readiness = max(10, min(100, computed_readiness))
 
-        day_name = datetime.strptime(latest_date, "%Y-%m-%d").strftime("%A")
+        day_name = latest_timestamp.strftime("%A")
         split_suggestions = {
             "Monday": ("Pull Day (Back & Biceps)", ["Deadlifts: 3 sets x 5 reps", "Pull-ups: 3 sets x max", "Barbell Rows: 3 sets x 8 reps", "Hammer Curls: 3 sets x 12 reps"]),
             "Tuesday": ("Push Day (Chest, Shoulders, Triceps)", ["Bench Press: 3 sets x 5 reps", "Overhead Press: 3 sets x 8 reps", "Incline Dumbbell Flyes: 3 sets x 10 reps", "Tricep Pushdowns: 3 sets x 12 reps"]),
