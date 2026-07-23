@@ -4,13 +4,14 @@ from pathlib import Path
 from datetime import datetime, date, timedelta
 import plotly.graph_objects as go
 import sys
+import math
 
 # Add parent dir to path to import db
 sys.path.append(str(Path(__file__).parent.parent))
 import db
 from recovery_predictor import RecoveryPredictor
 
-st.set_page_config(page_title="VID Health", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="My Health", page_icon="⚡", layout="wide")
 
 # ---------- THEME CONFIGURATION (SHADCN STYLING) ----------
 # FIRST PRIORITY: Default to Light mode
@@ -274,7 +275,7 @@ cols_header = st.columns([7, 1.5, 1])
 with cols_header[0]:
     st.markdown(f"""
         <div style="margin-bottom: 20px;">
-            <h1 style="font-size: 2rem; font-weight: 800; letter-spacing: -0.05em; margin: 0;">VID Health</h1>
+            <h1 style="font-size: 2rem; font-weight: 800; letter-spacing: -0.05em; margin: 0;">My Health</h1>
             <p style="font-size: 0.875rem; color: var(--muted-foreground); margin: 2px 0 0 0;">
                 Personal biometric tracking & training recommendations &bull; Last synced: {last_sync_str}
             </p>
@@ -379,22 +380,25 @@ def is_available(value):
     return value is not None and pd.notna(value)
 
 
-def format_int(value, missing="-"):
+def numeric_value(value, default=None):
+    """Return a finite float for display/calculations, or a safe default."""
     if not is_available(value):
-        return missing
+        return default
     try:
-        return str(int(float(value)))
+        numeric = float(value)
     except (TypeError, ValueError):
-        return missing
+        return default
+    return numeric if math.isfinite(numeric) else default
+
+
+def format_int(value, missing="-"):
+    numeric = numeric_value(value)
+    return str(int(numeric)) if numeric is not None else missing
 
 
 def format_float(value, digits=1, missing="-"):
-    if not is_available(value):
-        return missing
-    try:
-        return f"{float(value):.{digits}f}"
-    except (TypeError, ValueError):
-        return missing
+    numeric = numeric_value(value)
+    return f"{numeric:.{digits}f}" if numeric is not None else missing
 
 
 def clean_text(value):
@@ -416,7 +420,7 @@ tab_today, tab_trends, tab_comp, tab_ai, tab_recovery, tab_data = st.tabs([
 # ==================== TAB 1: TODAY'S SNAPSHOT ====================
 with tab_today:
     # Training Readiness Callout Banner
-    readiness = latest_df.get("training_readiness")
+    readiness = numeric_value(latest_df.get("training_readiness"))
     if readiness is not None:
         if readiness >= 80:
             border_indicator = "#10b981" # emerald-500
@@ -432,7 +436,7 @@ with tab_today:
         <div style="background-color: var(--card); border: 1px solid var(--border); border-left: 4px solid {border_indicator}; border-radius: 8px; padding: 18px; margin-bottom: 24px; box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);">
             <div style="font-size: 0.75rem; color: var(--muted-foreground); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">Training Readiness</div>
             <div style="display: flex; align-items: baseline; gap: 12px; margin-top: 4px;">
-                <span style="font-size: 2.25rem; font-weight: 800; letter-spacing: -0.05em; color: var(--card-foreground);">{int(readiness)}/100</span>
+                <span style="font-size: 2.25rem; font-weight: 800; letter-spacing: -0.05em; color: var(--card-foreground);">{format_int(readiness)}/100</span>
                 <span style="font-size: 0.875rem; font-weight: 500; color: var(--muted-foreground);">• {qualifier}</span>
             </div>
         </div>
@@ -442,14 +446,14 @@ with tab_today:
     col1, col2, col3, col4, col5 = st.columns(5)
     
     with col1:
-        hrv_val = latest_df.get("hrv_last_night")
+        hrv_val = numeric_value(latest_df.get("hrv_last_night"))
         st.markdown(f"""
         <div class="shadcn-card">
             <div class="shadcn-card-header">
                 <span class="shadcn-card-title">HRV</span>
                 {LUCIDE_ACTIVITY}
             </div>
-            <div class="shadcn-card-value">{int(hrv_val) if hrv_val else '—'}</div>
+            <div class="shadcn-card-value">{format_int(hrv_val, missing='—')}</div>
             <div class="shadcn-card-description">last night (ms)</div>
         </div>
         """, unsafe_allow_html=True)
@@ -459,14 +463,14 @@ with tab_today:
             st.plotly_chart(make_sparkline(hrv_series, "#6366f1"), config={'displayModeBar': False}, use_container_width=True)
 
     with col2:
-        sleep_val = latest_df.get("sleep_score")
+        sleep_val = numeric_value(latest_df.get("sleep_score"))
         st.markdown(f"""
         <div class="shadcn-card">
             <div class="shadcn-card-header">
                 <span class="shadcn-card-title">Sleep</span>
                 {LUCIDE_MOON}
             </div>
-            <div class="shadcn-card-value">{int(sleep_val) if sleep_val else '—'}</div>
+            <div class="shadcn-card-value">{format_int(sleep_val, missing='—')}</div>
             <div class="shadcn-card-description">quality score /100</div>
         </div>
         """, unsafe_allow_html=True)
@@ -476,14 +480,14 @@ with tab_today:
             st.plotly_chart(make_sparkline(sleep_series, "#8b5cf6"), config={'displayModeBar': False}, use_container_width=True)
 
     with col3:
-        hr_val = latest_df.get("resting_hr")
+        hr_val = numeric_value(latest_df.get("resting_hr"))
         st.markdown(f"""
         <div class="shadcn-card">
             <div class="shadcn-card-header">
                 <span class="shadcn-card-title">Resting HR</span>
                 {LUCIDE_HEART}
             </div>
-            <div class="shadcn-card-value">{int(hr_val) if hr_val else '—'}</div>
+            <div class="shadcn-card-value">{format_int(hr_val, missing='—')}</div>
             <div class="shadcn-card-description">beats per min (bpm)</div>
         </div>
         """, unsafe_allow_html=True)
@@ -493,14 +497,14 @@ with tab_today:
             st.plotly_chart(make_sparkline(hrv_avg_series, "#ef4444"), config={'displayModeBar': False}, use_container_width=True)
 
     with col4:
-        stress_val = latest_df.get("stress_avg")
+        stress_val = numeric_value(latest_df.get("stress_avg"))
         st.markdown(f"""
         <div class="shadcn-card">
             <div class="shadcn-card-header">
                 <span class="shadcn-card-title">Stress</span>
                 {LUCIDE_FLAME}
             </div>
-            <div class="shadcn-card-value">{int(stress_val) if stress_val else '—'}</div>
+            <div class="shadcn-card-value">{format_int(stress_val, missing='—')}</div>
             <div class="shadcn-card-description">daily average /100</div>
         </div>
         """, unsafe_allow_html=True)
@@ -510,14 +514,14 @@ with tab_today:
             st.plotly_chart(make_sparkline(stress_series, "#f59e0b"), config={'displayModeBar': False}, use_container_width=True)
 
     with col5:
-        bb_val = latest_df.get("bb_min")
+        bb_val = numeric_value(latest_df.get("bb_min"))
         st.markdown(f"""
         <div class="shadcn-card">
             <div class="shadcn-card-header">
                 <span class="shadcn-card-title">Body Battery</span>
                 {LUCIDE_BATTERY}
             </div>
-            <div class="shadcn-card-value">{int(bb_val) if bb_val is not None else '—'}</div>
+            <div class="shadcn-card-value">{format_int(bb_val, missing='—')}</div>
             <div class="shadcn-card-description">lowest level today</div>
         </div>
         """, unsafe_allow_html=True)
@@ -1283,10 +1287,14 @@ with tab_ai:
     
     with col_flag1:
         # Alcohol
-        sleep_stress = latest_df.get("stress_avg")
-        rhr = latest_df.get("resting_hr")
-        weekly_rhr = df["resting_hr"].mean()
-        weekly_hrv = df["hrv_weekly_avg"].iloc[-1] if not df["hrv_weekly_avg"].empty else df["hrv_last_night"].mean()
+        sleep_stress = numeric_value(latest_df.get("stress_avg"))
+        rhr = numeric_value(latest_df.get("resting_hr"))
+        weekly_rhr = numeric_value(df["resting_hr"].mean())
+        weekly_hrv = numeric_value(
+            df["hrv_weekly_avg"].iloc[-1]
+            if not df["hrv_weekly_avg"].empty
+            else df["hrv_last_night"].mean()
+        )
         
         is_alcohol = False
         if sleep_stress and sleep_stress > 45 and rhr and weekly_rhr and rhr > weekly_rhr + 6 and hrv_val and weekly_hrv and hrv_val < weekly_hrv * 0.82:
@@ -1317,8 +1325,8 @@ with tab_ai:
 
     with col_flag2:
         # Apnea
-        spo2_min_val = latest_df.get("spo2_min")
-        resp_avg_val = latest_df.get("respiration_avg")
+        spo2_min_val = numeric_value(latest_df.get("spo2_min"))
+        resp_avg_val = numeric_value(latest_df.get("respiration_avg"))
         
         is_apnea = False
         if spo2_min_val and spo2_min_val < 90:
@@ -1352,8 +1360,8 @@ with tab_recovery:
     st.markdown("<h3 style='font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 8px;'>Athletic Recovery Forecast Model</h3>", unsafe_allow_html=True)
     st.markdown("<p style='font-size: 0.875rem; color: var(--muted-foreground); margin-bottom: 24px;'>Simulate sleeping hours and workout intensity to project nervous system recovery rate.</p>", unsafe_allow_html=True)
     
-    current_hrv_val = hrv_val or 50
-    target_hrv_val = weekly_hrv or 60
+    current_hrv_val = hrv_val if hrv_val is not None else 50
+    target_hrv_val = weekly_hrv if weekly_hrv is not None else 60
     deficit = target_hrv_val - current_hrv_val
     
     col_inputs, col_results = st.columns([4, 6])
@@ -1603,7 +1611,7 @@ with tab_data:
             st.download_button(
                 label="Export CSV",
                 data=export_df.to_csv(index=False).encode("utf-8"),
-                file_name=f"vidhealth_records_{date.today().isoformat()}.csv",
+                file_name=f"my_health_records_{date.today().isoformat()}.csv",
                 mime="text/csv",
                 use_container_width=True,
             )

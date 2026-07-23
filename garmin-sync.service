@@ -1,5 +1,5 @@
 [Unit]
-Description=VID Health Garmin data sync
+Description=My Health Garmin data sync
 Wants=network-online.target
 After=network-online.target
 ConditionPathExists=/root/garmin-health/.env
