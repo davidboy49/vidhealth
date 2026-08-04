@@ -227,9 +227,41 @@ Structure your response in clean markdown with these sections:
 2. **Key Patterns** — HRV, RHR, sleep, stress, SpO2, steps. Skip any metric with
    nothing meaningful to report. Lead each point with the number, then one sentence
    of interpretation.
-3. **For Next Week** — 3-5 recommendations MAX, each tied explicitly to a specific
-   metric from this week's data. No recommendation without a number behind it.
+3. **Training & Recovery Guidelines for Next Week**
+Based on this analysis, the primary focus for the coming week will be on optimizing foundational recovery pillars while cautiously progressing with activity.
 
+Workout Intensity & Deload vs. Full Send:
+- Given the positive trajectory in your HRV and RHR, your autonomic nervous system appears to be responding well to recent recovery efforts. You are in a state conducive to moderate training progression, leaning towards building a more robust base rather than pushing maximal efforts.
+- Avoid "Full Send" sessions for the immediate future. Instead, focus on consistent, moderate-intensity aerobic work (e.g., Zone 2-3 heart rate, 30-60 minutes, 3-4 times per week) to enhance cardiovascular fitness without overly taxing your system.
+- Integrate 2-3 sessions of light to moderate strength training to build resilience and muscle mass. Prioritize proper form and controlled movements over heavy loads.
+- Active Recovery Days: On days without structured workouts, maintain a minimum of 5,000-7,000 steps through light walks or gentle movement to promote circulation and aid recovery, rather than extreme sedentary periods.
+
+Sleep Targets:
+- Priority One: Elevate your sleep quantity and quality to optimal levels. Target a consistent 7.5 to 8.5 hours of high-quality sleep nightly.
+- Sleep Hygiene Optimization:
+  - Strict Schedule: Go to bed and wake up at approximately the same time every day, including weekends, to regulate your circadian rhythm.
+  - Power Down Protocol: Implement a screen-free wind-down routine 60-90 minutes before bed, involving reading, light stretching, or mindfulness.
+  - Environment: Ensure your bedroom is completely dark, quiet, and cool (ideally 18-20°C / 64-68°F).
+- Deep & REM Focus: Actively monitor your Deep and REM sleep stages. If these remain low, consider biohacking strategies like:
+  - Magnesium L-threonate supplementation (consult a healthcare professional first).
+  - Avoiding heavy meals and alcohol close to bedtime.
+  - Using blue light blocking glasses in the evening.
+
+Stress Management:
+- While your average stress has improved, the persistent high 'Max Stress' scores suggest recurrent acute stressors. Develop proactive strategies to mitigate these peaks.
+- Daily Mindfulness/Meditation: Incorporate 10-15 minutes of guided meditation or breathwork into your daily routine, particularly in the morning or before high-stress periods.
+- Strategic Breaks: Schedule micro-breaks throughout your day to consciously de-stress and reset. Even 2-5 minutes of focused breathing can be highly effective.
+- Nature Exposure: Spend time outdoors, especially in natural environments, which has been shown to significantly reduce physiological stress markers.
+
+Addressing SpO2 – Urgent Medical Consultation:
+- The most critical action point is to immediately consult with a medical professional (e.g., your primary care physician or a sleep specialist) regarding the consistently low minimum SpO2 values during sleep.
+- These dips below 90% (and even into the low 80s) are a strong indicator of potential sleep-disordered breathing (e.g., sleep apnea). This condition can have serious long-term health consequences and profoundly impair recovery. A formal sleep study (polysomnography) is highly recommended for diagnosis and appropriate management. Do not delay this step.
+
+Nutrition & Hydration:
+- Consistent Hydration: Maintain excellent hydration throughout the day, aiming for ample water intake, especially on active days.
+- Nutrient-Dense Diet: Focus on a balanced diet rich in whole foods, lean proteins, healthy fats, and complex carbohydrates to support energy demands, muscle repair, and overall cellular function. Consider consuming a nutrient-dense snack shortly after moderate exercise to aid recovery.
+
+By diligently implementing these guidelines, you will be leveraging your body's observed capacity for recovery while proactively addressing the identified physiological stressors and potential health concerns. This comprehensive approach will set the foundation for enhanced performance, well-being, and sustained health.
 Do not output HTML, only clean Markdown.
 """
 
