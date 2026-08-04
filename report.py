@@ -39,7 +39,7 @@ def generate_report(days=7):
     lines = []
     lines.append(f"📊 **Garmin Health — Last {len(records)} Days**\n")
     
-    # HRV
+    # HRV1
     hrv_vals = []
     for r in records:
         h = r.get("hrv", {})
