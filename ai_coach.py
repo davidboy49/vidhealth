@@ -145,13 +145,27 @@ def _build_metrics_block(df, include_extended: bool = True) -> str:
     return metrics_block, "\n".join(trend_lines)
 
 
-def generate_weekly_report(days: int = 7) -> str:
+def generate_weekly_report(days: int = 7, model_override: str = None) -> str:
     """
     Fetches the last N days of data from the database, sends it to the AI Coach model,
     generates a health report, saves it in the database for the latest day, and returns it.
     """
-    if not client or not api_key:
-        raise ValueError("Neither GEMINI_API_KEY nor DEEPSEEK_API_KEY environment variable was found in .env")
+    model_to_use = model_override if model_override else weekly_model
+    
+    # Dynamically select provider based on model prefix
+    current_api_key = api_key
+    current_base_url = base_url
+    if model_to_use and model_to_use.startswith("deepseek"):
+        current_api_key = os.environ.get("DEEPSEEK_API_KEY") or current_api_key
+        current_base_url = "https://api.deepseek.com"
+    elif model_to_use and model_to_use.startswith("gemini"):
+        current_api_key = os.environ.get("GEMINI_API_KEY") or current_api_key
+        current_base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+
+    if not current_api_key:
+        raise ValueError(f"No API key found for model {model_to_use}. Please set GEMINI_API_KEY or DEEPSEEK_API_KEY in .env")
+
+    dynamic_client = OpenAI(api_key=current_api_key, base_url=current_base_url)
 
     df = db.get_df(limit=days)
     if df.empty:
@@ -220,8 +234,8 @@ Do not output HTML, only clean Markdown.
 """
 
     try:
-        response = client.chat.completions.create(
-            model=weekly_model,
+        response = dynamic_client.chat.completions.create(
+            model=model_to_use,
             messages=[
                 {"role": "user", "content": prompt.strip()}
             ],

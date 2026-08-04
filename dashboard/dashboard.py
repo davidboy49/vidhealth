@@ -1261,11 +1261,23 @@ with tab_ai:
         """, unsafe_allow_html=True)
 
     st.markdown("<div style='margin-bottom: 12px;'></div>", unsafe_allow_html=True)
-    if st.button("Generate On-Demand AI Report"):
-        with st.spinner("AI Coach is compiling biometric analysis..."):
+    col_model, col_btn = st.columns([1, 2])
+    with col_model:
+        selected_model = st.selectbox(
+            "Select AI Model",
+            options=["gemini-3.5-flash", "deepseek-v4-pro", "deepseek-v4-flash", "gemini-1.5-pro", "gemini-1.5-flash"],
+            index=0,
+            help="Select the AI model to generate the report. Ensure your .env has the matching API key."
+        )
+    with col_btn:
+        st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+        generate_clicked = st.button("Generate On-Demand AI Report", type="primary")
+
+    if generate_clicked:
+        with st.spinner(f"AI Coach is compiling biometric analysis using {selected_model}..."):
             try:
                 from ai_coach import generate_weekly_report
-                report = generate_weekly_report(days=7)
+                report = generate_weekly_report(days=7, model_override=selected_model)
                 cleaned_report = clean_text(report)
                 if cleaned_report:
                     st.session_state["generated_ai_summary"] = cleaned_report
