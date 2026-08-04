@@ -272,7 +272,7 @@ Do not output HTML, only clean Markdown.
                 {"role": "user", "content": prompt.strip()}
             ],
             temperature=0.3,
-            max_tokens=2048,
+            max_tokens=8192,
         )
     except Exception as e:
         raise AIReportGenerationError(
