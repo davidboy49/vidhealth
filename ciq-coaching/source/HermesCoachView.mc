@@ -7,7 +7,7 @@ using Toybox.Activity;
 using Toybox.UserProfile;
 using Toybox.Time;
 
-// Hermes Coach Data Field
+// Hermes Coach Data Field1123
 // Shows: Body Battery, HRV status, Training Readiness, and a coaching verdict
 // Everything at a glance on your Fenix 7X
 
