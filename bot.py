@@ -198,6 +198,7 @@ async def recover_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     latest = df.iloc[-1]
     hrv = latest.get("hrv_last_night") or 50
     weekly_hrv = latest.get("hrv_weekly_avg") or df["hrv_last_night"].mean()
+    deficit = weekly_hrv - hrv
     
     # Call shared predictive recovery model
     prediction_8h = RecoveryPredictor.predict_tomorrow(

@@ -12,10 +12,36 @@ load_dotenv(Path(__file__).parent / ".env")
 import db
 
 # Configure AI Coach provider
-api_key = os.environ.get("DEEPSEEK_API_KEY")
+gemini_key = os.environ.get("GEMINI_API_KEY")
+deepseek_key = os.environ.get("DEEPSEEK_API_KEY")
+
+if gemini_key:
+    api_key = gemini_key
+    base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+    weekly_model = "gemini-3.5-flash"
+    briefing_model = "gemini-3.5-flash"
+elif deepseek_key:
+    api_key = deepseek_key
+    base_url = "https://api.deepseek.com"
+    weekly_model = "deepseek-v4-pro"
+    briefing_model = "deepseek-v4-flash"
+else:
+    api_key = None
+    base_url = None
+    weekly_model = None
+    briefing_model = None
+
+# Allow manual model overrides from environment variables
+weekly_model_override = os.environ.get("AI_WEEKLY_MODEL")
+briefing_model_override = os.environ.get("AI_BRIEFING_MODEL")
+if weekly_model_override:
+    weekly_model = weekly_model_override
+if briefing_model_override:
+    briefing_model = briefing_model_override
+
 client = OpenAI(
     api_key=api_key,
-    base_url="https://api.deepseek.com/v1",
+    base_url=base_url,
 ) if api_key else None
 
 
@@ -124,10 +150,8 @@ def generate_weekly_report(days: int = 7) -> str:
     Fetches the last N days of data from the database, sends it to the AI Coach model,
     generates a health report, saves it in the database for the latest day, and returns it.
     """
-    if not client:
-        raise ValueError("DEEPSEEK_API_KEY environment variable not found in .env")
-    if not api_key:
-        raise ValueError("DEEPSEEK_API_KEY environment variable not found in .env")
+    if not client or not api_key:
+        raise ValueError("Neither GEMINI_API_KEY nor DEEPSEEK_API_KEY environment variable was found in .env")
 
     df = db.get_df(limit=days)
     if df.empty:
@@ -197,7 +221,7 @@ Do not output HTML, only clean Markdown.
 
     try:
         response = client.chat.completions.create(
-            model="deepseek-chat",
+            model=weekly_model,
             messages=[
                 {"role": "user", "content": prompt.strip()}
             ],
@@ -233,10 +257,8 @@ def generate_morning_briefing(days: int = 3) -> str:
     """
     Generates a concise, 3-sentence daily coach briefing for the Telegram push.
     """
-    if not client:
-        raise ValueError("DEEPSEEK_API_KEY environment variable not found in .env")
-    if not api_key:
-        raise ValueError("DEEPSEEK_API_KEY environment variable not found in .env")
+    if not client or not api_key:
+        raise ValueError("Neither GEMINI_API_KEY nor DEEPSEEK_API_KEY environment variable was found in .env")
 
     df = db.get_df(limit=days)
     if df.empty:
@@ -275,7 +297,7 @@ No headers, no markdown bold symbols (*), just 3 clean sentences.
 """
 
     response = client.chat.completions.create(
-        model="deepseek-chat",
+        model=briefing_model,
         messages=[
             {"role": "user", "content": prompt.strip()}
         ],
