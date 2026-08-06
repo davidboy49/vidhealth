@@ -1,0 +1,20 @@
+[Unit]
+Description=Datasette Health Data API
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/garmin-health
+ExecStart=/root/garmin-health/venv/bin/datasette serve /root/garmin-health/health.db \
+  --port 8094 \
+  --host 127.0.0.1 \
+  --metadata /root/garmin-health/metadata.yaml \
+  --setting allow_download off \
+  --setting default_page_size 50 \
+  --setting max_returned_rows 5000
+Restart=always
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target

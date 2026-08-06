@@ -22,3 +22,5 @@ push_report.py
 query_report.py
 send_evening_nudge.py
 send_nudge.py
+venv/
+*.db

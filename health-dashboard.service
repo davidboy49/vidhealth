@@ -5,8 +5,8 @@ After=network.target
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/root/garmin-health/dashboard
-ExecStart=/usr/local/lib/hermes-agent/venv/bin/streamlit run dashboard.py --server.port 8093 --server.headless true
+WorkingDirectory=/root/garmin-health
+ExecStart=/root/garmin-health/venv/bin/streamlit run dashboard/dashboard.py --server.port 8093 --server.headless true
 Restart=always
 RestartSec=5
 

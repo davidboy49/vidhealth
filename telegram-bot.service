@@ -6,7 +6,7 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=/root/garmin-health
-ExecStart=/usr/local/lib/hermes-agent/venv/bin/python bot.py
+ExecStart=/root/garmin-health/venv/bin/python bot.py
 Restart=always
 RestartSec=5
 
