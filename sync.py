@@ -171,7 +171,10 @@ def backfill(days: int = 14):
         out_path = DATA_DIR / f"{ds}.json"
         
         # Check if already synced in DB or file
-        if out_path.exists() and i > 1:
+        # Re-sync the last 3 days (i <= 3) so late-arriving watch data
+        # (phone BT sync happens after our cron) gets picked up.
+        # Older days are locked to avoid hammering the API.
+        if out_path.exists() and i > 3:
             try:
                 conn = db.get_connection()
                 cursor = conn.cursor()
