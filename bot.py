@@ -421,6 +421,61 @@ async def alerts_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
     await update.message.reply_text("\n".join(msg_lines), parse_mode="Markdown")
 
+# ---------- DIRECT NOTE & HABIT COMMANDS ----------
+
+async def note_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_auth(update, context):
+        return
+    note_text = " ".join(context.args).strip() if context.args else ""
+    if not note_text:
+        await update.message.reply_text("✍️ Please provide note content. Example:\n`/note Sore quads from heavy squats`", parse_mode="Markdown")
+        return
+    today_str = date.today().isoformat()
+    db.log_activity(date_str=today_str, category="free_note", tag="note", note=note_text)
+    await update.message.reply_text(
+        f"📝 **Free Note Logged!**\n"
+        f"📅 Date: `{today_str}`\n"
+        f"✍️ Note: _{note_text}_",
+        parse_mode="Markdown"
+    )
+
+async def habit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_auth(update, context):
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "😈 **Log an Unholy Habit via Command:**\n\n"
+            "Usage: `/habit <name> [units] [details]`\n\n"
+            "Examples:\n"
+            "• `/habit alcohol 2 two pints IPA`\n"
+            "• `/habit late_meal 1 pizza at 11pm`\n"
+            "• `/habit late_caffeine 1 espresso at 4pm`\n"
+            "• `/habit stress 1 high mental fatigue`",
+            parse_mode="Markdown"
+        )
+        return
+    tag = context.args[0].lower().replace(" ", "_")
+    val = 1.0
+    note_start = 1
+    if len(context.args) > 1:
+        try:
+            val = float(context.args[1])
+            note_start = 2
+        except ValueError:
+            val = 1.0
+            note_start = 1
+    note_text = " ".join(context.args[note_start:]).strip()
+    today_str = date.today().isoformat()
+    db.log_activity(date_str=today_str, category="unholy_habit", tag=tag, note=note_text, value=val)
+    tag_title = tag.replace("_", " ").title()
+    await update.message.reply_text(
+        f"✅ **Unholy Habit Logged!**\n\n"
+        f"😈 **Habit:** {tag_title} ({val})\n"
+        f"📅 **Date:** `{today_str}`\n"
+        f"📝 **Details:** {note_text or 'Logged'}",
+        parse_mode="Markdown"
+    )
+
 # Handle text messages (free note logger)
 async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_auth(update, context):
@@ -445,17 +500,22 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         f"📝 **Free Note Logged!**\n"
         f"📅 Date: `{today_str}`\n"
         f"✍️ Note: _{text}_\n\n"
-        f"This will be factored into your AI coaching analysis.",
+        f"Factored into your daily AI coaching recovery analysis.",
         parse_mode="Markdown"
     )
 
 # Callback Query Handler for inline buttons
 async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if query:
+        try:
+            await query.answer()
+        except Exception:
+            pass
+            
     if not await check_auth(update, context):
         return
         
-    query = update.callback_query
-    await query.answer()
     data = query.data
     today_str = date.today().isoformat()
     
@@ -479,7 +539,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         text = (
             f"🍷 **Alcohol Intake**\n"
             f"📅 Date: `{today_str}`\n\n"
-            "How many drinks did you have?"
+            "How many standard drinks did you have?"
         )
         await query.edit_message_text(text, reply_markup=get_alcohol_keyboard(), parse_mode="Markdown")
         
@@ -487,9 +547,17 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         text = (
             f"📝 **Write a Free Note**\n"
             f"📅 Date: `{today_str}`\n\n"
-            "Simply send me a text message with whatever you'd like to log (e.g. *'Sore quads from heavy squats'*, *'Red eye flight'*, *'Felt energized'*)."
+            "👇 **Type your note directly in the message box below and send it!**\n\n"
+            "Examples:\n"
+            "• _Sore quads from heavy squats_\n"
+            "• _Red eye flight, feeling exhausted_\n"
+            "• _Drank 3L water today, energetic_\n\n"
+            "_(Or use `/note <text>` anytime)_"
         )
-        await query.edit_message_text(text, parse_mode="Markdown")
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="menu_main")]
+        ])
+        await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
         
     elif data == "menu_view_today":
         logs = db.get_activity_logs(date_str=today_str, limit=20)
@@ -592,6 +660,8 @@ def main():
     # Handlers
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("log", log_command))
+    app.add_handler(CommandHandler("note", note_command))
+    app.add_handler(CommandHandler("habit", habit_command))
     app.add_handler(CommandHandler("notes", notes_command))
     app.add_handler(CommandHandler("insights", insights_command))
     app.add_handler(CommandHandler("alerts", alerts_command))
@@ -612,3 +682,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
