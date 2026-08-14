@@ -743,9 +743,19 @@ with tab_today:
             log_type = st.selectbox("Category", ["😈 Unholy Habit", "📝 Free Note"], key="quick_log_cat")
             
             if "Unholy Habit" in log_type:
-                habit_tag = st.selectbox("Habit", ["Alcohol", "Late Meal", "Late Caffeine", "Late Screen Time", "Nicotine", "High Mental Stress"], key="quick_habit_tag")
-                habit_val = st.number_input("Count / Units (e.g. drinks)", min_value=1.0, max_value=20.0, value=1.0, step=1.0, key="quick_habit_val")
-                habit_note = st.text_input("Details / Note (optional)", placeholder="e.g. 2 glasses red wine", key="quick_habit_note")
+                habit_preset = st.selectbox(
+                    "Habit Preset",
+                    ["Alcohol", "Late Meal", "Late Caffeine", "Late Screen Time", "Nicotine", "High Mental Stress", "➕ Custom (Type your own)"],
+                    key="quick_habit_tag"
+                )
+                if "Custom" in habit_preset:
+                    custom_name = st.text_input("Custom Habit / Activity Name", placeholder="e.g. Sauna, Cold Plunge, Creatine, Fasting", key="custom_habit_name")
+                    habit_tag = custom_name.strip() if custom_name.strip() else "custom_habit"
+                else:
+                    habit_tag = habit_preset
+
+                habit_val = st.number_input("Count / Units (e.g. drinks, minutes, mg)", min_value=0.5, max_value=500.0, value=1.0, step=0.5, key="quick_habit_val")
+                habit_note = st.text_input("Details / Note (optional)", placeholder="e.g. 20 mins @ 90°C or 2 pints IPA", key="quick_habit_note")
             else:
                 habit_tag = "note"
                 habit_val = None
