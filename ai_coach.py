@@ -93,16 +93,29 @@ def _rolling_avg(df, col, window):
     return _safe_round(tail.mean(), 1)
 
 
-def _build_metrics_block(df, include_extended: bool = True) -> str:
+def _build_metrics_block(df, include_extended: bool = True) -> tuple[str, str]:
     """
     Builds the per-day text block AND a precomputed trend summary line, so the
     LLM doesn't have to eyeball day-to-day noise to infer direction itself.
+    Includes daily user-logged habits and notes.
     """
     day_lines = []
     for _, row in df.iterrows():
+        date_str = str(row['date'])
+        logs = db.get_activity_logs(date_str=date_str, limit=20)
+        logs_summary = []
+        for l in logs:
+            tag_label = l.get('tag', '').replace('_', ' ').title()
+            val_label = f" ({l['value']})" if l.get('value') is not None else ""
+            note_label = f" - {l['note']}" if l.get('note') else ""
+            cat_prefix = "[Unholy Habit] " if l.get('category') == 'unholy_habit' else "[Note] "
+            logs_summary.append(f"{cat_prefix}{tag_label}{val_label}{note_label}")
+        
+        logs_text = " | ".join(logs_summary) if logs_summary else "None logged"
+
         if include_extended:
             day_info = (
-                f"Date: {row['date']}\n"
+                f"Date: {date_str}\n"
                 f"  HRV (Last Night): {_format_metric(row.get('hrv_last_night'))} ms (Weekly Avg: {_format_metric(row.get('hrv_weekly_avg'))} ms)\n"
                 f"  Sleep Score: {_format_metric(row.get('sleep_score'))}/100 (Duration: {_format_metric(row.get('sleep_duration'), '0')} s, "
                 f"Deep: {_format_metric(row.get('sleep_deep'), '0')} s, REM: {_format_metric(row.get('sleep_rem'), '0')} s)\n"
@@ -114,16 +127,18 @@ def _build_metrics_block(df, include_extended: bool = True) -> str:
                 f"  Training Readiness: {_format_metric(row.get('training_readiness'))}/100\n"
                 f"  SpO2: Avg: {_format_metric(row.get('spo2_avg'))}%, Min: {_format_metric(row.get('spo2_min'))}%\n"
                 f"  Respiration Rate: Avg: {_format_metric(row.get('respiration_avg'))} breaths/min\n"
+                f"  Daily Habits / Notes: {logs_text}\n"
                 f"--------------------------------------------------"
             )
         else:
             day_info = (
-                f"Date: {row['date']}\n"
+                f"Date: {date_str}\n"
                 f"  HRV: {_format_metric(row.get('hrv_last_night'))} ms (Weekly Avg: {_format_metric(row.get('hrv_weekly_avg'))} ms)\n"
                 f"  Sleep Score: {_format_metric(row.get('sleep_score'))}/100\n"
                 f"  Resting HR: {_format_metric(row.get('resting_hr'))} bpm\n"
                 f"  Stress Level: Avg: {_format_metric(row.get('stress_avg'))}/100\n"
                 f"  Training Readiness: {_format_metric(row.get('training_readiness'))}/100\n"
+                f"  Daily Habits / Notes: {logs_text}\n"
                 f"--------------------------------------------------"
             )
         day_lines.append(day_info)

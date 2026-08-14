@@ -3,8 +3,15 @@ import sys
 import logging
 from pathlib import Path
 from datetime import datetime, date, timedelta
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
 from dotenv import load_dotenv
 
 # Setup logging
@@ -12,10 +19,12 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
-from dotenv import load_dotenv
+
 load_dotenv(Path(__file__).parent / ".env")
 
 import db
+import analytics
+import anomaly_detector
 from recovery_predictor import RecoveryPredictor
 
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8944060108:AAGFTzKVMtDMP87BP1CYGEM5ZjXh9UCWl5o")
@@ -27,17 +36,23 @@ def is_authorized(chat_id: int) -> bool:
     return str(chat_id) == str(AUTHORIZED_CHAT_ID)
 
 async def check_auth(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    chat_id = update.effective_chat.id
+    chat_id = update.effective_chat.id if update.effective_chat else None
+    if not chat_id:
+        return False
     if not AUTHORIZED_CHAT_ID:
-        await update.message.reply_text(
-            f"⚠️ Bot is unconfigured.\n"
-            f"To authorize this chat, please add this line to your `.env` file:\n"
-            f"`TELEGRAM_CHAT_ID={chat_id}`\n"
-            f"Then restart the bot."
-        )
+        if update.message:
+            await update.message.reply_text(
+                f"⚠️ Bot is unconfigured.\n"
+                f"To authorize this chat, please add this line to your `.env` file:\n"
+                f"`TELEGRAM_CHAT_ID={chat_id}`\n"
+                f"Then restart the bot."
+            )
         return False
     if not is_authorized(chat_id):
-        await update.message.reply_text("❌ Access Denied: Unauthorized User.")
+        if update.message:
+            await update.message.reply_text("❌ Access Denied: Unauthorized User.")
+        elif update.callback_query:
+            await update.callback_query.answer("❌ Access Denied", show_alert=True)
         return False
     return True
 
@@ -48,12 +63,16 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
         "🏋️ **Welcome to Hermes Health Coach Bot!**\n\n"
         "Here are the available commands:\n"
+        "✍️ /log - Interactive daily activity & unholy habit logger\n"
         "📊 /health - Today's health metrics snapshot\n"
+        "🧠 /insights - Biometric intelligence & HRV baseline bands\n"
+        "🚨 /alerts - Check active health anomaly warnings\n"
+        "📋 /notes - View your recent logged habits & notes\n"
         "💪 /gym - Today's dynamic gym plan recommendation\n"
-        "📝 /week - Latest AI coaching weekly summary\n"
         "🔮 /recover - Predictive recovery projection\n"
+        "📝 /week - Latest AI coaching weekly summary\n"
         "❓ /status - Quick biometric readiness update\n\n"
-        f"Your Telegram Chat ID: `{chat_id}`\n"
+        "💡 *Tip: You can also send me any plain text message to log a quick Free Note!*"
     )
     if not AUTHORIZED_CHAT_ID:
         welcome_text += (
@@ -255,6 +274,271 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     await update.message.reply_text(f"❓ **Status:** {status} ({int(readiness)}/100)", parse_mode="Markdown")
 
+# ---------- ACTIVITY & HABIT LOGGING HANDLERS ----------
+
+def get_main_log_keyboard():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("😈 Log Unholy Habit", callback_data="menu_unholy"),
+            InlineKeyboardButton("📝 Write Free Note", callback_data="menu_note")
+        ],
+        [
+            InlineKeyboardButton("📋 View Today's Logs", callback_data="menu_view_today")
+        ]
+    ])
+
+def get_unholy_habits_keyboard():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🍷 Alcohol", callback_data="unholy_alcohol_menu"),
+            InlineKeyboardButton("🍕 Late Meal", callback_data="log_habit:late_meal:1:Late Heavy Meal")
+        ],
+        [
+            InlineKeyboardButton("☕ Late Caffeine (>2PM)", callback_data="log_habit:late_caffeine:1:Late Caffeine"),
+            InlineKeyboardButton("📱 Late Screen Time", callback_data="log_habit:late_screen:1:Late Screen Time")
+        ],
+        [
+            InlineKeyboardButton("🚬 Nicotine / Vape", callback_data="log_habit:nicotine:1:Nicotine"),
+            InlineKeyboardButton("⚡ High Mental Stress", callback_data="log_habit:mental_stress:1:High Mental Stress")
+        ],
+        [
+            InlineKeyboardButton("🔙 Back to Main Menu", callback_data="menu_main")
+        ]
+    ])
+
+def get_alcohol_keyboard():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🍺 1 Drink", callback_data="log_habit:alcohol:1:1 standard drink"),
+            InlineKeyboardButton("🍷 2 Drinks", callback_data="log_habit:alcohol:2:2 standard drinks"),
+            InlineKeyboardButton("🍾 3+ Drinks", callback_data="log_habit:alcohol:3:3+ drinks")
+        ],
+        [
+            InlineKeyboardButton("🔙 Back to Habits", callback_data="menu_unholy")
+        ]
+    ])
+
+async def log_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_auth(update, context):
+        return
+    today_str = date.today().isoformat()
+    text = (
+        f"✍️ **Daily Activity & Habit Logger**\n"
+        f"📅 Date: `{today_str}`\n\n"
+        "Choose an action below to log unholy habits, sleep disruptors, or custom free notes:"
+    )
+    await update.message.reply_text(text, reply_markup=get_main_log_keyboard(), parse_mode="Markdown")
+
+async def notes_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_auth(update, context):
+        return
+    logs = db.get_activity_logs(limit=15)
+    if not logs:
+        await update.message.reply_text("📋 No activity logs or habits recorded yet. Use /log to add one!", parse_mode="Markdown")
+        return
+    
+    msg_lines = ["📋 **Recent Activity & Habit Logs**\n"]
+    for l in logs:
+        icon = "😈" if l.get("category") == "unholy_habit" else "📝"
+        tag_title = l.get("tag", "").replace("_", " ").title()
+        val = f" ({l['value']})" if l.get("value") is not None else ""
+        note = f"\n   _{l['note']}_" if l.get("note") else ""
+        msg_lines.append(f"• `{l['date']}` {icon} **{tag_title}**{val}{note}")
+    
+    await update.message.reply_text("\n".join(msg_lines), parse_mode="Markdown")
+
+async def insights_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_auth(update, context):
+        return
+    
+    df = db.get_df(limit=30)
+    if df.empty:
+        await update.message.reply_text("No biometric data available yet.", parse_mode="Markdown")
+        return
+    
+    df_bands = analytics.calculate_hrv_baseline(df)
+    latest = df_bands.iloc[-1]
+    
+    hrv_val = latest.get("hrv_last_night")
+    band_status = latest.get("hrv_band_status", "Calibrating")
+    lower = latest.get("hrv_band_lower")
+    upper = latest.get("hrv_band_upper")
+    base_mean = latest.get("hrv_baseline_mean")
+    
+    status_icon = "🟢" if band_status == "Balanced" else ("🔵" if "Elevated" in band_status else "🔴")
+    
+    # Sleep disruption
+    sleep_disp = analytics.calculate_sleep_disruption_index(latest)
+    
+    # Habit impact
+    df_logs = db.get_activity_logs_df(limit=100)
+    impact = analytics.analyze_habit_impact(df, df_logs)
+    
+    msg = (
+        f"🧠 **Biometric Intelligence & HRV Baselines**\n\n"
+        f"💙 **HRV Status:** {status_icon} *{band_status}*\n"
+        f"• Last Night: **{hrv_val or '—'} ms**\n"
+        f"• Personalized Normal Band: **{lower or '—'} – {upper or '—'} ms** (Mean: {base_mean or '—'} ms)\n\n"
+        f"😴 **Sleep Disruption Index:** **{sleep_disp.get('score', '—')}/100** ({sleep_disp.get('category')})\n"
+        f"• Deep Sleep: {sleep_disp.get('deep_pct')}% | REM Sleep: {sleep_disp.get('rem_pct')}%\n"
+    )
+    if sleep_disp.get("drivers"):
+        msg += f"• Drivers: {', '.join(sleep_disp['drivers'])}\n"
+        
+    if impact.get("alcohol_impact"):
+        alc = impact["alcohol_impact"]
+        msg += (
+            f"\n📊 **Alcohol Impact Quantification:**\n"
+            f"• HRV Delta: **{alc['delta_hrv']:+.1f} ms** (Clean: {alc['clean_hrv']} vs Alc: {alc['alcohol_hrv']})\n"
+            f"• Resting HR Delta: **{alc['delta_rhr']:+.1f} bpm** (Clean: {alc['clean_rhr']} vs Alc: {alc['alcohol_rhr']})\n"
+            f"• Sleep Score Delta: **{alc['delta_sleep']:+.1f} pts**\n"
+        )
+        
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+async def alerts_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_auth(update, context):
+        return
+    
+    anomalies = anomaly_detector.scan_daily_anomalies()
+    recent_db_alerts = db.get_recent_alerts(limit=5)
+    
+    if not anomalies and not recent_db_alerts:
+        await update.message.reply_text("✅ **All Clear!** No biometric anomalies detected in recent data.", parse_mode="Markdown")
+        return
+    
+    msg_lines = ["🚨 **Health Anomaly & Safety Monitor**\n"]
+    if anomalies:
+        msg_lines.append("*Current Active Flags:*")
+        for a in anomalies:
+            icon = "🛑" if a["severity"] == "CRITICAL" else "⚠️"
+            msg_lines.append(f"{icon} **{a['title']}**\n{a['message']}\n")
+            
+    if recent_db_alerts:
+        msg_lines.append("\n*Recent Historical Alerts:*")
+        for alert in recent_db_alerts[:3]:
+            msg_lines.append(f"• `{alert['timestamp']}` [{alert['severity']}] {alert['alert_type']}")
+            
+    await update.message.reply_text("\n".join(msg_lines), parse_mode="Markdown")
+
+# Handle text messages (free note logger)
+async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_auth(update, context):
+        return
+    
+    if not update.message or not update.message.text:
+        return
+        
+    text = update.message.text.strip()
+    if text.startswith("/"):
+        return
+        
+    today_str = date.today().isoformat()
+    db.log_activity(
+        date_str=today_str,
+        category="free_note",
+        tag="note",
+        note=text
+    )
+    
+    await update.message.reply_text(
+        f"📝 **Free Note Logged!**\n"
+        f"📅 Date: `{today_str}`\n"
+        f"✍️ Note: _{text}_\n\n"
+        f"This will be factored into your AI coaching analysis.",
+        parse_mode="Markdown"
+    )
+
+# Callback Query Handler for inline buttons
+async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_auth(update, context):
+        return
+        
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    today_str = date.today().isoformat()
+    
+    if data == "menu_main":
+        text = (
+            f"✍️ **Daily Activity & Habit Logger**\n"
+            f"📅 Date: `{today_str}`\n\n"
+            "Choose an action below to log unholy habits, sleep disruptors, or custom free notes:"
+        )
+        await query.edit_message_text(text, reply_markup=get_main_log_keyboard(), parse_mode="Markdown")
+        
+    elif data == "menu_unholy":
+        text = (
+            f"😈 **Log an Unholy Habit / Disruptor**\n"
+            f"📅 Date: `{today_str}`\n\n"
+            "Select what you indulged in or experienced today:"
+        )
+        await query.edit_message_text(text, reply_markup=get_unholy_habits_keyboard(), parse_mode="Markdown")
+        
+    elif data == "unholy_alcohol_menu":
+        text = (
+            f"🍷 **Alcohol Intake**\n"
+            f"📅 Date: `{today_str}`\n\n"
+            "How many drinks did you have?"
+        )
+        await query.edit_message_text(text, reply_markup=get_alcohol_keyboard(), parse_mode="Markdown")
+        
+    elif data == "menu_note":
+        text = (
+            f"📝 **Write a Free Note**\n"
+            f"📅 Date: `{today_str}`\n\n"
+            "Simply send me a text message with whatever you'd like to log (e.g. *'Sore quads from heavy squats'*, *'Red eye flight'*, *'Felt energized'*)."
+        )
+        await query.edit_message_text(text, parse_mode="Markdown")
+        
+    elif data == "menu_view_today":
+        logs = db.get_activity_logs(date_str=today_str, limit=20)
+        if not logs:
+            text = f"📋 **Today's Logs ({today_str}):**\n\nNo habits or notes logged for today yet."
+        else:
+            text = f"📋 **Today's Logs ({today_str}):**\n\n"
+            for l in logs:
+                icon = "😈" if l.get("category") == "unholy_habit" else "📝"
+                tag_title = l.get("tag", "").replace("_", " ").title()
+                val = f" ({l['value']})" if l.get("value") is not None else ""
+                note = f"\n   _{l['note']}_" if l.get("note") else ""
+                text += f"• {icon} **{tag_title}**{val}{note}\n"
+        
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="menu_main")]
+        ])
+        await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
+        
+    elif data.startswith("log_habit:"):
+        parts = data.split(":")
+        tag = parts[1]
+        val = float(parts[2]) if len(parts) > 2 and parts[2] else 1.0
+        note = parts[3] if len(parts) > 3 else ""
+        
+        db.log_activity(
+            date_str=today_str,
+            category="unholy_habit",
+            tag=tag,
+            note=note,
+            value=val
+        )
+        
+        tag_title = tag.replace("_", " ").title()
+        text = (
+            f"✅ **Unholy Habit Logged!**\n\n"
+            f"😈 **Habit:** {tag_title}\n"
+            f"📅 **Date:** `{today_str}`\n"
+            f"📝 **Details:** {note}\n\n"
+            f"Hermes Coach will correlate this with tomorrow's sleep and HRV recovery."
+        )
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("➕ Log Another Habit", callback_data="menu_unholy"),
+                InlineKeyboardButton("📋 View Today's Logs", callback_data="menu_view_today")
+            ]
+        ])
+        await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
+
 # ---------- DAILY AUTOMATED PUSH FUNCTION ----------
 
 async def send_daily_push():
@@ -307,11 +591,21 @@ def main():
     
     # Handlers
     app.add_handler(CommandHandler("start", start_command))
+    app.add_handler(CommandHandler("log", log_command))
+    app.add_handler(CommandHandler("notes", notes_command))
+    app.add_handler(CommandHandler("insights", insights_command))
+    app.add_handler(CommandHandler("alerts", alerts_command))
     app.add_handler(CommandHandler("health", health_command))
     app.add_handler(CommandHandler("gym", gym_command))
     app.add_handler(CommandHandler("week", week_command))
     app.add_handler(CommandHandler("recover", recover_command))
     app.add_handler(CommandHandler("status", status_command))
+    
+    # Inline buttons callback handler
+    app.add_handler(CallbackQueryHandler(callback_query_handler))
+    
+    # Free text message handler
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message_handler))
     
     # Start polling
     app.run_polling()

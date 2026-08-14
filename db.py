@@ -54,6 +54,29 @@ def init_db():
         waist REAL
     )
     """)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS activity_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date TEXT NOT NULL,
+        timestamp TEXT NOT NULL,
+        category TEXT NOT NULL,
+        tag TEXT NOT NULL,
+        note TEXT,
+        value REAL
+    )
+    """)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS anomaly_alerts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date TEXT NOT NULL,
+        timestamp TEXT NOT NULL,
+        severity TEXT NOT NULL,
+        alert_type TEXT NOT NULL,
+        message TEXT NOT NULL,
+        metrics_json TEXT,
+        acknowledged INTEGER DEFAULT 0
+    )
+    """)
     conn.commit()
     conn.close()
 
@@ -277,6 +300,145 @@ def get_body_comp_df(limit: int = 30):
     """, conn)
     conn.close()
     return df
+
+# ---------- ACTIVITY & HABIT LOGGING ----------
+
+def log_activity(date_str: str, category: str, tag: str, note: str = "", value: float | None = None) -> int:
+    """
+    Logs an activity, unholy habit, or free note.
+    If category is 'unholy_habit' and tag is 'alcohol', automatically syncs alcohol_logged flag in daily_metrics.
+    Returns the new row ID.
+    """
+    init_db()
+    conn = get_connection()
+    cursor = conn.cursor()
+    now_iso = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    cursor.execute("""
+    INSERT INTO activity_logs (date, timestamp, category, tag, note, value)
+    VALUES (?, ?, ?, ?, ?, ?)
+    """, (date_str, now_iso, category, tag, note, value))
+    row_id = cursor.lastrowid
+
+    # If alcohol is logged, ensure daily_metrics flag is updated if row exists
+    if tag == "alcohol":
+        try:
+            cursor.execute("UPDATE daily_metrics SET alcohol_logged = 1 WHERE date = ?", (date_str,))
+        except Exception:
+            pass
+
+    conn.commit()
+    conn.close()
+    return row_id
+
+def get_activity_logs(date_str: str | None = None, limit: int = 50):
+    """
+    Fetches activity logs as a list of dicts.
+    If date_str is provided, filters by date.
+    """
+    init_db()
+    conn = get_connection()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    if date_str:
+        cursor.execute("""
+            SELECT * FROM activity_logs 
+            WHERE date = ? 
+            ORDER BY timestamp DESC, id DESC 
+            LIMIT ?
+        """, (date_str, limit))
+    else:
+        cursor.execute("""
+            SELECT * FROM activity_logs 
+            ORDER BY date DESC, timestamp DESC, id DESC 
+            LIMIT ?
+        """, (limit,))
+    rows = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return rows
+
+def get_activity_logs_df(limit: int = 100):
+    """
+    Fetches activity logs as a pandas DataFrame.
+    """
+    import pandas as pd
+    init_db()
+    conn = get_connection()
+    df = pd.read_sql_query(f"""
+        SELECT * FROM activity_logs 
+        ORDER BY date ASC, timestamp ASC
+        LIMIT {limit}
+    """, conn)
+    conn.close()
+    return df
+
+def delete_activity_log(log_id: int) -> bool:
+    """Deletes an activity log entry by ID."""
+    init_db()
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM activity_logs WHERE id = ?", (log_id,))
+    deleted = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return deleted
+
+# ---------- ANOMALY ALERTS ----------
+
+def save_anomaly_alert(date_str: str, severity: str, alert_type: str, message: str, metrics_dict: dict | None = None) -> int:
+    """
+    Records an anomaly alert.
+    """
+    init_db()
+    conn = get_connection()
+    cursor = conn.cursor()
+    now_iso = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    metrics_json = json.dumps(metrics_dict) if metrics_dict else None
+    
+    cursor.execute("""
+    INSERT INTO anomaly_alerts (date, timestamp, severity, alert_type, message, metrics_json, acknowledged)
+    VALUES (?, ?, ?, ?, ?, ?, 0)
+    """, (date_str, now_iso, severity, alert_type, message, metrics_json))
+    row_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return row_id
+
+def get_recent_alerts(limit: int = 20, unacknowledged_only: bool = False):
+    """
+    Fetches recent anomaly alerts.
+    """
+    init_db()
+    conn = get_connection()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    if unacknowledged_only:
+        cursor.execute("""
+            SELECT * FROM anomaly_alerts 
+            WHERE acknowledged = 0 
+            ORDER BY timestamp DESC, id DESC 
+            LIMIT ?
+        """, (limit,))
+    else:
+        cursor.execute("""
+            SELECT * FROM anomaly_alerts 
+            ORDER BY timestamp DESC, id DESC 
+            LIMIT ?
+        """, (limit,))
+    rows = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return rows
+
+def acknowledge_alert(alert_id: int) -> bool:
+    """Marks an alert as acknowledged."""
+    init_db()
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE anomaly_alerts SET acknowledged = 1 WHERE id = ?", (alert_id,))
+    updated = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return updated
 
 if __name__ == "__main__":
     init_db()

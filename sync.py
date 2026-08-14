@@ -19,6 +19,7 @@ from garminconnect import Garmin
 load_dotenv(Path(__file__).parent / ".env")
 
 import db
+import anomaly_detector
 
 DATA_DIR = Path(__file__).parent / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -153,6 +154,15 @@ def sync_latest(target_date: str | None = None) -> dict:
 
     backup_path = save_result(date_str, data)
     print(f"[OK] {date_str} - completed sync")
+
+    # Scan and dispatch any health anomaly alerts
+    try:
+        alerts = anomaly_detector.dispatch_alerts_if_needed(date_str)
+        if alerts:
+            print(f"[ALERT] {len(alerts)} health anomalies detected and processed for {date_str}")
+    except Exception as e:
+        print(f"[WARN] Failed to run anomaly check for {date_str}: {e}")
+
     return {
         "date": date_str,
         "sources": synced_sources,

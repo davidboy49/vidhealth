@@ -9,6 +9,8 @@ import math
 # Add parent dir to path to import db
 sys.path.append(str(Path(__file__).parent.parent))
 import db
+import analytics
+import anomaly_detector
 from recovery_predictor import RecoveryPredictor
 
 st.set_page_config(page_title="My Health", page_icon="⚡", layout="wide")
@@ -419,6 +421,22 @@ tab_today, tab_trends, tab_comp, tab_ai, tab_recovery, tab_data = st.tabs([
 
 # ==================== TAB 1: TODAY'S SNAPSHOT ====================
 with tab_today:
+    # Active Health Anomaly Alert Callouts
+    active_anomalies = anomaly_detector.scan_daily_anomalies()
+    if active_anomalies:
+        for a in active_anomalies:
+            alert_border = "#ef4444" if a["severity"] == "CRITICAL" else "#f59e0b"
+            st.markdown(f"""
+            <div style="background-color: var(--card); border: 1px solid var(--border); border-left: 4px solid {alert_border}; border-radius: 8px; padding: 14px 18px; margin-bottom: 16px; box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);">
+                <div style="font-size: 0.875rem; font-weight: 700; color: {alert_border}; display: flex; align-items: center; gap: 8px;">
+                    {a['title']}
+                </div>
+                <div style="font-size: 0.875rem; color: var(--card-foreground); margin-top: 4px; line-height: 1.4;">
+                    {a['message']}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
     # Training Readiness Callout Banner
     readiness = numeric_value(latest_df.get("training_readiness"))
     if readiness is not None:
@@ -661,6 +679,67 @@ with tab_today:
             </div>
         </div>
         """, unsafe_allow_html=True)
+
+    # Today's Activity & Habit Logs Section
+    st.markdown("<div style='margin-bottom: 24px;'></div>", unsafe_allow_html=True)
+    st.markdown(f"<h3 style='font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 12px; display: flex; align-items: center;'>{LUCIDE_ACTIVITY} Daily Habits & Notes</h3>", unsafe_allow_html=True)
+    
+    today_iso = str(latest_df.get("date") or date.today().isoformat())
+    today_logs = db.get_activity_logs(date_str=today_iso, limit=20)
+    
+    col_logs_view, col_logs_add = st.columns([3, 2])
+    with col_logs_view:
+        if not today_logs:
+            st.markdown(f"""
+            <div class="shadcn-card" style="padding: 20px; color: var(--muted-foreground); font-size: 0.875rem;">
+                No unholy habits or free notes logged for {today_iso} yet.
+                <div style="font-size: 0.75rem; margin-top: 6px; color: var(--muted-foreground);">
+                    Tip: You can log quickly from Telegram with <code>/log</code> or by texting the bot!
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            log_items = []
+            for l in today_logs:
+                icon = "😈" if l.get("category") == "unholy_habit" else "📝"
+                tag_name = l.get("tag", "").replace("_", " ").title()
+                val_text = f" ({l['value']})" if l.get("value") is not None else ""
+                note_text = f" — <span style='color: var(--muted-foreground); font-style: italic;'>{l['note']}</span>" if l.get("note") else ""
+                time_str = l.get("timestamp", "").split()[-1] if " " in str(l.get("timestamp", "")) else ""
+                log_items.append(f"<div style='font-size: 0.875rem; padding: 6px 0; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between;'><span>{icon} <strong>{tag_name}</strong>{val_text}{note_text}</span><span style='font-size: 0.75rem; color: var(--muted-foreground);'>{time_str}</span></div>")
+            
+            st.markdown(f"""
+            <div class="shadcn-card" style="padding: 20px; display: flex; flex-direction: column; gap: 4px;">
+                {''.join(log_items)}
+            </div>
+            """, unsafe_allow_html=True)
+            
+    with col_logs_add:
+        with st.expander("➕ Log Habit or Note for Today", expanded=False):
+            with st.form("quick_log_form", clear_on_submit=True):
+                log_type = st.selectbox("Category", ["Unholy Habit", "Free Note"])
+                if log_type == "Unholy Habit":
+                    habit_tag = st.selectbox("Habit", ["Alcohol", "Late Meal", "Late Caffeine", "Late Screen Time", "Nicotine", "High Mental Stress"])
+                    habit_val = st.number_input("Count / Units (e.g. drinks)", min_value=1.0, max_value=20.0, value=1.0, step=1.0)
+                    habit_note = st.text_input("Details / Note (optional)", placeholder="e.g. 2 glasses red wine")
+                else:
+                    habit_tag = "note"
+                    habit_val = None
+                    habit_note = st.text_area("Note", placeholder="e.g. Red eye flight, heavy squat session, sore neck")
+                
+                submitted = st.form_submit_button("Save Log", use_container_width=True)
+                if submitted:
+                    cat_key = "unholy_habit" if log_type == "Unholy Habit" else "free_note"
+                    tag_key = habit_tag.lower().replace(" ", "_") if log_type == "Unholy Habit" else "note"
+                    db.log_activity(
+                        date_str=today_iso,
+                        category=cat_key,
+                        tag=tag_key,
+                        note=habit_note,
+                        value=habit_val if log_type == "Unholy Habit" else None
+                    )
+                    st.success("Log saved!")
+                    st.rerun()
 
 # ==================== TAB 2: TREND ANALYSIS ====================
 with tab_trends:
@@ -1017,19 +1096,86 @@ with tab_trends:
             )
             st.plotly_chart(fig_sleep_arch, use_container_width=True)
 
-        # Chart 3: Stress vs Body Battery
+        # Chart 1: Personalized HRV Baseline Band Chart
+        df_bands = analytics.calculate_hrv_baseline(trend_df)
+        if not df_bands.empty and "hrv_band_upper" in df_bands.columns:
+            fig_band = go.Figure()
+            # Upper band bound
+            fig_band.add_trace(go.Scatter(
+                x=df_bands["date"], y=df_bands["hrv_band_upper"],
+                mode="lines", line=dict(width=0),
+                showlegend=False, name="Upper Band"
+            ))
+            # Lower band bound with shaded fill
+            fig_band.add_trace(go.Scatter(
+                x=df_bands["date"], y=df_bands["hrv_band_lower"],
+                mode="lines", line=dict(width=0),
+                fill="tonexty", fillcolor="rgba(99, 102, 241, 0.12)",
+                name="Normal Baseline Band (±0.75 SD)"
+            ))
+            # Baseline Mean line
+            fig_band.add_trace(go.Scatter(
+                x=df_bands["date"], y=df_bands["hrv_baseline_mean"],
+                mode="lines", line=dict(color="#6366f1", width=1.5, dash="dash"),
+                name="Rolling Baseline Mean"
+            ))
+            # Actual HRV
+            fig_band.add_trace(go.Scatter(
+                x=df_bands["date"], y=df_bands["hrv_numeric"],
+                mode="lines+markers", line=dict(color="#4f46e5", width=2.5),
+                marker=dict(size=6, color="#4f46e5"),
+                name="Nightly HRV"
+            ))
+            fig_band.update_layout(
+                template=plotly_template,
+                title="Personalized HRV Baseline Bands (±0.75 SD Normal Zone)",
+                hovermode="x unified",
+                yaxis=dict(title="HRV (ms)", gridcolor=grid_color),
+                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                height=320,
+                margin=dict(l=40, r=40, t=40, b=30),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            )
+            st.plotly_chart(fig_band, use_container_width=True)
+
+        # Chart 2: HRV vs Resting HR with adult reference band for resting HR.
+        fig_hr = go.Figure()
+        if "hrv_last_night" in trend_df.columns and trend_df["hrv_last_night"].notna().any():
+            fig_hr.add_trace(go.Scatter(
+                x=trend_df["date"], y=trend_df["hrv_last_night"],
+                mode="lines+markers", name="HRV (ms)",
+                line=dict(color="#6366f1", width=2),
+                marker=dict(size=4)
+            ))
+        if "resting_hr" in trend_df.columns and trend_df["resting_hr"].notna().any():
+            fig_hr.add_trace(go.Scatter(
+                x=trend_df["date"], y=trend_df["resting_hr"],
+                mode="lines+markers", name="Resting HR (bpm)",
+                line=dict(color="#ef4444", width=2),
+                marker=dict(size=4), yaxis="y2"
+            ))
+        fig_hr.add_hrect(y0=60, y1=100, yref="y2", fillcolor="rgba(16,185,129,0.06)", line_width=0)
+        fig_hr.update_layout(
+            template=plotly_template,
+            title="HRV vs Resting Heart Rate",
+            hovermode="x unified",
+            yaxis=dict(title="HRV (ms)", side="left", gridcolor=grid_color),
+            yaxis2=dict(title="Resting HR (bpm)", side="right", overlaying="y", range=[40, 100]),
+            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+            height=300,
+            margin=dict(l=40, r=40, t=40, b=30),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
+        st.plotly_chart(fig_hr, use_container_width=True)
+
+        # Stress Load and Body Battery
         fig_stress = go.Figure()
         if "stress_avg" in trend_df.columns and trend_df["stress_avg"].notna().any():
             fig_stress.add_trace(go.Scatter(
                 x=trend_df["date"], y=trend_df["stress_avg"],
-                mode="lines+markers", name="Stress Avg",
+                mode="lines+markers", name="Avg Stress",
                 line=dict(color="#f59e0b", width=2),
                 marker=dict(size=4)
-            ))
-            fig_stress.add_trace(go.Scatter(
-                x=trend_df["date"], y=trend_df["stress_avg"].rolling(7, min_periods=2).mean(),
-                mode="lines", name="Stress 7d Avg",
-                line=dict(color="#b45309", width=2, dash="dot")
             ))
         if "bb_min" in trend_df.columns and trend_df["bb_min"].notna().any():
             fig_stress.add_trace(go.Scatter(
@@ -1050,44 +1196,6 @@ with tab_trends:
         )
         st.plotly_chart(fig_stress, use_container_width=True)
 
-        col_left, col_right = st.columns(2)
-        with col_left:
-            if "sleep_score" in trend_df.columns and trend_df["sleep_score"].notna().any():
-                fig_sleep = go.Figure()
-                fig_sleep.add_trace(go.Bar(
-                    x=trend_df["date"], y=trend_df["sleep_score"],
-                    name="Sleep Score",
-                    marker_color="#8b5cf6"
-                ))
-                fig_sleep.update_layout(
-                    template=plotly_template,
-                    title="Sleep Quality Score",
-                    yaxis=dict(range=[0, 100], gridcolor=grid_color),
-                    plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                    height=250,
-                    margin=dict(l=40, r=40, t=30, b=30)
-                )
-                st.plotly_chart(fig_sleep, use_container_width=True)
-
-        with col_right:
-            if "steps" in trend_df.columns and trend_df["steps"].notna().any():
-                fig_steps = go.Figure()
-                fig_steps.add_trace(go.Bar(
-                    x=trend_df["date"], y=trend_df["steps"],
-                    name="Steps",
-                    marker_color="#06b6d4"
-                ))
-                fig_steps.add_hline(y=8000, line_dash="dash", line_color="#f59e0b")
-                fig_steps.update_layout(
-                    template=plotly_template,
-                    title="Daily Steps and 8k Target",
-                    yaxis=dict(gridcolor=grid_color),
-                    plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                    height=250,
-                    margin=dict(l=40, r=40, t=30, b=30)
-                )
-                st.plotly_chart(fig_steps, use_container_width=True)
-
         # Pulse Ox & Respiration Chart
         if "spo2_avg" in trend_df.columns and trend_df["spo2_avg"].notna().any():
             fig_spo2 = go.Figure()
@@ -1101,68 +1209,94 @@ with tab_trends:
             if "spo2_min" in trend_df.columns and trend_df["spo2_min"].notna().any():
                 fig_spo2.add_trace(go.Scatter(
                     x=trend_df["date"], y=trend_df["spo2_min"],
-                    mode="markers", name="SpO2 Min",
-                    marker=dict(color="#ef4444", size=6)
+                    mode="lines+markers", name="SpO2 Min",
+                    line=dict(color="#f43f5e", width=1.5, dash="dot"),
+                    marker=dict(size=3)
                 ))
             if "respiration_avg" in trend_df.columns and trend_df["respiration_avg"].notna().any():
                 fig_spo2.add_trace(go.Scatter(
                     x=trend_df["date"], y=trend_df["respiration_avg"],
-                    mode="lines+markers", name="Respiration (br/min)",
-                    line=dict(color="#10b981", width=2),
-                    marker=dict(size=4),
+                    mode="lines", name="Respiration Rate",
+                    line=dict(color="#a855f7", width=1.5, dash="dash"),
                     yaxis="y2"
                 ))
             fig_spo2.update_layout(
                 template=plotly_template,
-                title="Pulse Ox, Min SpO2, and Respiration Rate",
+                title="Pulse Ox (SpO2) and Respiration Trends",
                 hovermode="x unified",
                 yaxis=dict(title="SpO2 (%)", side="left", range=[80, 100], gridcolor=grid_color),
-                yaxis2=dict(title="Breaths/min", overlaying="y", side="right", range=[10, 25], showgrid=False),
+                yaxis2=dict(title="Breaths/min", side="right", overlaying="y", range=[8, 25]),
                 plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                height=300,
+                height=280,
                 margin=dict(l=40, r=40, t=40, b=30),
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
             )
             st.plotly_chart(fig_spo2, use_container_width=True)
 
-        # Automated Correlation Discovery Panel
-        st.markdown("<h3 style='font-size: 1.125rem; font-weight: 700; letter-spacing: -0.02em; margin-top: 24px; margin-bottom: 12px;'>Biometric Correlation Insights</h3>", unsafe_allow_html=True)
+        # Correlation and Habit Impact Analysis
+        st.markdown("<h4 style='font-size: 1.125rem; font-weight: 700; letter-spacing: -0.01em; margin-top: 24px; margin-bottom: 12px;'>Biomarker Correlation & Habit Intelligence</h4>", unsafe_allow_html=True)
+        
+        corr_df = analytics.calculate_correlation_matrix(trend_df)
+        df_logs = db.get_activity_logs_df(limit=200)
+        habit_res = analytics.analyze_habit_impact(trend_df, df_logs)
 
-        cols = ["hrv_last_night", "sleep_score", "resting_hr", "stress_avg", "steps", "training_readiness"]
-        available_cols = [c for c in cols if c in trend_df.columns and trend_df[c].notna().sum() > 5]
+        col_heat, col_habit = st.columns([3, 2])
+        with col_heat:
+            if not corr_df.empty:
+                fig_corr = go.Figure(data=go.Heatmap(
+                    z=corr_df.values,
+                    x=corr_df.columns,
+                    y=corr_df.index,
+                    colorscale="RdBu",
+                    zmin=-1, zmax=1,
+                    text=corr_df.values,
+                    texttemplate="%{text:.2f}",
+                    hoverongaps=False
+                ))
+                fig_corr.update_layout(
+                    template=plotly_template,
+                    title="Cross-Metric Pearson Correlations",
+                    height=360,
+                    margin=dict(l=40, r=40, t=40, b=40),
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    paper_bgcolor="rgba(0,0,0,0)"
+                )
+                st.plotly_chart(fig_corr, use_container_width=True)
+            else:
+                st.info("Gathering more variation to compute correlation matrix.")
 
-        insights = []
-        if len(available_cols) >= 2:
-            corr_matrix = trend_df[available_cols].corr()
-            if "hrv_last_night" in corr_matrix.index and "stress_avg" in corr_matrix.columns:
-                val = corr_matrix.loc["hrv_last_night", "stress_avg"]
-                if val < -0.35:
-                    insights.append(f"Daytime stress averages and sleep recovery (HRV) are negatively correlated ({val:.2f}). Higher stress may be suppressing recovery.")
-            if "hrv_last_night" in corr_matrix.index and "sleep_score" in corr_matrix.columns:
-                val = corr_matrix.loc["hrv_last_night", "sleep_score"]
-                if val > 0.35:
-                    insights.append(f"Sleep score and overnight HRV show a positive correlation ({val:.2f}). Quality sleep appears to support autonomic recovery.")
-            if "resting_hr" in corr_matrix.index and "hrv_last_night" in corr_matrix.columns:
-                val = corr_matrix.loc["resting_hr", "hrv_last_night"]
-                if val < -0.4:
-                    insights.append(f"Resting HR and HRV are strongly inversely linked ({val:.2f}). Lower waking heart rate aligns with stronger parasympathetic recovery.")
-            if "steps" in corr_matrix.index and "sleep_score" in corr_matrix.columns:
-                val = corr_matrix.loc["steps", "sleep_score"]
-                if val > 0.25:
-                    insights.append(f"Higher step counts show a positive relationship ({val:.2f}) with sleep quality score in this range.")
-            if "training_readiness" in corr_matrix.index and "stress_avg" in corr_matrix.columns:
-                val = corr_matrix.loc["training_readiness", "stress_avg"]
-                if val < -0.35:
-                    insights.append(f"Training readiness falls as stress rises ({val:.2f}). Watch cumulative stress before harder sessions.")
-
-        if not insights:
-            insights.append("Still gathering enough variation to discover reliable correlations. Keep logging consistently.")
-
-        st.markdown(f"""
-        <div class="shadcn-card" style="padding: 20px; gap: 8px; border-left: 4px solid var(--border);">
-            {''.join(f"<div style='font-size: 0.875rem; line-height: 1.5; padding: 4px 0;'>{ins}</div>" for ins in insights)}
-        </div>
-        """, unsafe_allow_html=True)
+        with col_habit:
+            if habit_res.get("alcohol_impact"):
+                alc = habit_res["alcohol_impact"]
+                st.markdown(f"""
+                <div class="shadcn-card" style="padding: 20px; border-left: 4px solid #f59e0b; margin-top: 40px;">
+                    <div style="font-size: 0.875rem; font-weight: 700; color: var(--foreground); margin-bottom: 8px;">🍷 Alcohol & Habit Recovery Delta</div>
+                    <div style="font-size: 0.75rem; color: var(--muted-foreground); margin-bottom: 12px;">Comparing {habit_res['alcohol_days']} habit days vs {habit_res['clean_days']} baseline clean days:</div>
+                    <div style="display: flex; flex-direction: column; gap: 8px;">
+                        <div style="display: flex; justify-content: space-between; font-size: 0.875rem;">
+                            <span>HRV Delta:</span>
+                            <strong style="color: {'#ef4444' if alc['delta_hrv'] and alc['delta_hrv'] < 0 else '#10b981'};">{alc['delta_hrv']:+.1f} ms</strong>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; font-size: 0.875rem;">
+                            <span>Resting HR Delta:</span>
+                            <strong style="color: {'#ef4444' if alc['delta_rhr'] and alc['delta_rhr'] > 0 else '#10b981'};">{alc['delta_rhr']:+.1f} bpm</strong>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; font-size: 0.875rem;">
+                            <span>Sleep Score Delta:</span>
+                            <strong style="color: {'#ef4444' if alc['delta_sleep'] and alc['delta_sleep'] < 0 else '#10b981'};">{alc['delta_sleep']:+.1f} pts</strong>
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.markdown("""
+                <div class="shadcn-card" style="padding: 20px; border-left: 4px solid var(--border); margin-top: 40px;">
+                    <div style="font-size: 0.875rem; font-weight: 700; color: var(--foreground); margin-bottom: 6px;">Habit Impact Analysis</div>
+                    <div style="font-size: 0.8rem; color: var(--muted-foreground); line-height: 1.5;">
+                        Log unholy habits (like alcohol, late meals, caffeine) using <code>/log</code> in Telegram to calculate statistical recovery penalties here.
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
 
     else:
         st.info("Accumulating data. Wear watch consistently to show trend charts.")
@@ -1658,3 +1792,54 @@ with tab_data:
 
         if avg_sleep is not None and pd.notna(avg_sleep):
             st.caption(f"Filtered average sleep score: {avg_sleep:.0f}/100")
+
+        # Activity Logs & Habits Table
+        st.markdown("<div style='margin-top: 32px;'></div>", unsafe_allow_html=True)
+        st.markdown(f"<h4 style='font-size: 1.125rem; font-weight: 700; letter-spacing: -0.01em; margin-bottom: 12px; display: flex; align-items: center;'>{LUCIDE_ACTIVITY} Activity Logs & Habits History</h4>", unsafe_allow_html=True)
+        
+        logs_df = db.get_activity_logs_df(limit=200)
+        if logs_df.empty:
+            st.info("No activity or habit logs recorded yet. Use /log on Telegram or the Today tab.")
+        else:
+            col_log_table, col_log_del = st.columns([4, 1])
+            with col_log_table:
+                display_logs = logs_df.copy().sort_values("timestamp", ascending=False)
+                display_logs["tag"] = display_logs["tag"].str.replace("_", " ").str.title()
+                display_logs["category"] = display_logs["category"].map({"unholy_habit": "Unholy Habit", "free_note": "Free Note"}).fillna(display_logs["category"])
+                st.dataframe(
+                    display_logs.rename(columns={
+                        "id": "ID", "date": "Date", "timestamp": "Timestamp",
+                        "category": "Category", "tag": "Habit / Type", "note": "Note", "value": "Units / Count"
+                    }),
+                    use_container_width=True,
+                    hide_index=True,
+                    height=260
+                )
+            with col_log_del:
+                with st.form("delete_log_form"):
+                    del_id = st.number_input("Delete Log ID", min_value=1, step=1)
+                    if st.form_submit_button("Delete Entry", use_container_width=True):
+                        if db.delete_activity_log(int(del_id)):
+                            st.success(f"Deleted entry #{del_id}")
+                            st.rerun()
+                        else:
+                            st.error(f"No entry found with ID #{del_id}")
+
+        # Anomaly Alerts History Table
+        st.markdown("<div style='margin-top: 24px;'></div>", unsafe_allow_html=True)
+        st.markdown(f"<h4 style='font-size: 1.125rem; font-weight: 700; letter-spacing: -0.01em; margin-bottom: 12px; display: flex; align-items: center;'>{LUCIDE_ALERT_TRIANGLE} Health Anomaly Alerts History</h4>", unsafe_allow_html=True)
+        
+        alerts_list = db.get_recent_alerts(limit=50)
+        if not alerts_list:
+            st.info("No historical anomaly alerts recorded.")
+        else:
+            alerts_df = pd.DataFrame(alerts_list)
+            st.dataframe(
+                alerts_df[["id", "date", "timestamp", "severity", "alert_type", "message"]].rename(columns={
+                    "id": "ID", "date": "Date", "timestamp": "Logged At",
+                    "severity": "Severity", "alert_type": "Alert Type", "message": "Details"
+                }),
+                use_container_width=True,
+                hide_index=True,
+                height=220
+            )
