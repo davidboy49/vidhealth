@@ -15,7 +15,7 @@ class RecoveryPredictor:
         # Each hour above/below modifies HRV by ~5ms.
         sleep_multiplier = (sleep_hours - 7.0) * 5.0
         
-        # Training load penalty
+        # Training load penalty123123
         workout_penalties = {
             "Rest Day": 10.0,
             "Zone 2 (Light)": 2.0,
