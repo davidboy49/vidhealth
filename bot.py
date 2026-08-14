@@ -1,6 +1,7 @@
 import os
 import sys
 import logging
+import html
 from pathlib import Path
 from datetime import datetime, date, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -323,29 +324,29 @@ async def log_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     today_str = date.today().isoformat()
     text = (
-        f"✍️ **Daily Activity & Habit Logger**\n"
-        f"📅 Date: `{today_str}`\n\n"
+        f"✍️ <b>Daily Activity & Habit Logger</b>\n"
+        f"📅 Date: <code>{today_str}</code>\n\n"
         "Choose an action below to log unholy habits, sleep disruptors, or custom free notes:"
     )
-    await update.message.reply_text(text, reply_markup=get_main_log_keyboard(), parse_mode="Markdown")
+    await update.message.reply_text(text, reply_markup=get_main_log_keyboard(), parse_mode="HTML")
 
 async def notes_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_auth(update, context):
         return
     logs = db.get_activity_logs(limit=15)
     if not logs:
-        await update.message.reply_text("📋 No activity logs or habits recorded yet. Use /log to add one!", parse_mode="Markdown")
+        await update.message.reply_text("📋 No activity logs or habits recorded yet. Use /log to add one!", parse_mode="HTML")
         return
     
-    msg_lines = ["📋 **Recent Activity & Habit Logs**\n"]
+    msg_lines = ["📋 <b>Recent Activity & Habit Logs</b>\n"]
     for l in logs:
         icon = "😈" if l.get("category") == "unholy_habit" else "📝"
         tag_title = l.get("tag", "").replace("_", " ").title()
         val = f" ({l['value']})" if l.get("value") is not None else ""
-        note = f"\n   _{l['note']}_" if l.get("note") else ""
-        msg_lines.append(f"• `{l['date']}` {icon} **{tag_title}**{val}{note}")
+        note = f"\n   <i>{html.escape(str(l['note']))}</i>" if l.get("note") else ""
+        msg_lines.append(f"• <code>{l['date']}</code> {icon} <b>{tag_title}</b>{val}{note}")
     
-    await update.message.reply_text("\n".join(msg_lines), parse_mode="Markdown")
+    await update.message.reply_text("\n".join(msg_lines), parse_mode="HTML")
 
 async def insights_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_auth(update, context):
@@ -353,7 +354,7 @@ async def insights_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     df = db.get_df(limit=30)
     if df.empty:
-        await update.message.reply_text("No biometric data available yet.", parse_mode="Markdown")
+        await update.message.reply_text("No biometric data available yet.", parse_mode="HTML")
         return
     
     df_bands = analytics.calculate_hrv_baseline(df)
@@ -375,11 +376,11 @@ async def insights_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     impact = analytics.analyze_habit_impact(df, df_logs)
     
     msg = (
-        f"🧠 **Biometric Intelligence & HRV Baselines**\n\n"
-        f"💙 **HRV Status:** {status_icon} *{band_status}*\n"
-        f"• Last Night: **{hrv_val or '—'} ms**\n"
-        f"• Personalized Normal Band: **{lower or '—'} – {upper or '—'} ms** (Mean: {base_mean or '—'} ms)\n\n"
-        f"😴 **Sleep Disruption Index:** **{sleep_disp.get('score', '—')}/100** ({sleep_disp.get('category')})\n"
+        f"🧠 <b>Biometric Intelligence & HRV Baselines</b>\n\n"
+        f"💙 <b>HRV Status:</b> {status_icon} <i>{band_status}</i>\n"
+        f"• Last Night: <b>{hrv_val or '—'} ms</b>\n"
+        f"• Personalized Normal Band: <b>{lower or '—'} – {upper or '—'} ms</b> (Mean: {base_mean or '—'} ms)\n\n"
+        f"😴 <b>Sleep Disruption Index:</b> <b>{sleep_disp.get('score', '—')}/100</b> ({sleep_disp.get('category')})\n"
         f"• Deep Sleep: {sleep_disp.get('deep_pct')}% | REM Sleep: {sleep_disp.get('rem_pct')}%\n"
     )
     if sleep_disp.get("drivers"):
@@ -388,13 +389,13 @@ async def insights_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if impact.get("alcohol_impact"):
         alc = impact["alcohol_impact"]
         msg += (
-            f"\n📊 **Alcohol Impact Quantification:**\n"
-            f"• HRV Delta: **{alc['delta_hrv']:+.1f} ms** (Clean: {alc['clean_hrv']} vs Alc: {alc['alcohol_hrv']})\n"
-            f"• Resting HR Delta: **{alc['delta_rhr']:+.1f} bpm** (Clean: {alc['clean_rhr']} vs Alc: {alc['alcohol_rhr']})\n"
-            f"• Sleep Score Delta: **{alc['delta_sleep']:+.1f} pts**\n"
+            f"\n📊 <b>Alcohol Impact Quantification:</b>\n"
+            f"• HRV Delta: <b>{alc['delta_hrv']:+.1f} ms</b> (Clean: {alc['clean_hrv']} vs Alc: {alc['alcohol_hrv']})\n"
+            f"• Resting HR Delta: <b>{alc['delta_rhr']:+.1f} bpm</b> (Clean: {alc['clean_rhr']} vs Alc: {alc['alcohol_rhr']})\n"
+            f"• Sleep Score Delta: <b>{alc['delta_sleep']:+.1f} pts</b>\n"
         )
         
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    await update.message.reply_text(msg, parse_mode="HTML")
 
 async def alerts_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_auth(update, context):
@@ -404,22 +405,22 @@ async def alerts_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     recent_db_alerts = db.get_recent_alerts(limit=5)
     
     if not anomalies and not recent_db_alerts:
-        await update.message.reply_text("✅ **All Clear!** No biometric anomalies detected in recent data.", parse_mode="Markdown")
+        await update.message.reply_text("✅ <b>All Clear!</b> No biometric anomalies detected in recent data.", parse_mode="HTML")
         return
     
-    msg_lines = ["🚨 **Health Anomaly & Safety Monitor**\n"]
+    msg_lines = ["🚨 <b>Health Anomaly & Safety Monitor</b>\n"]
     if anomalies:
-        msg_lines.append("*Current Active Flags:*")
+        msg_lines.append("<b>Current Active Flags:</b>")
         for a in anomalies:
             icon = "🛑" if a["severity"] == "CRITICAL" else "⚠️"
-            msg_lines.append(f"{icon} **{a['title']}**\n{a['message']}\n")
+            msg_lines.append(f"{icon} <b>{html.escape(a['title'])}</b>\n{html.escape(a['message'])}\n")
             
     if recent_db_alerts:
-        msg_lines.append("\n*Recent Historical Alerts:*")
+        msg_lines.append("\n<b>Recent Historical Alerts:</b>")
         for alert in recent_db_alerts[:3]:
-            msg_lines.append(f"• `{alert['timestamp']}` [{alert['severity']}] {alert['alert_type']}")
+            msg_lines.append(f"• <code>{alert['timestamp']}</code> [{alert['severity']}] {html.escape(alert['alert_type'])}")
             
-    await update.message.reply_text("\n".join(msg_lines), parse_mode="Markdown")
+    await update.message.reply_text("\n".join(msg_lines), parse_mode="HTML")
 
 # ---------- DIRECT NOTE & HABIT COMMANDS ----------
 
@@ -428,15 +429,15 @@ async def note_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     note_text = " ".join(context.args).strip() if context.args else ""
     if not note_text:
-        await update.message.reply_text("✍️ Please provide note content. Example:\n`/note Sore quads from heavy squats`", parse_mode="Markdown")
+        await update.message.reply_text("✍️ Please provide note content. Example:\n<code>/note Sore quads from heavy squats</code>", parse_mode="HTML")
         return
     today_str = date.today().isoformat()
     db.log_activity(date_str=today_str, category="free_note", tag="note", note=note_text)
     await update.message.reply_text(
-        f"📝 **Free Note Logged!**\n"
-        f"📅 Date: `{today_str}`\n"
-        f"✍️ Note: _{note_text}_",
-        parse_mode="Markdown"
+        f"📝 <b>Free Note Logged!</b>\n"
+        f"📅 Date: <code>{today_str}</code>\n"
+        f"✍️ Note: <i>{html.escape(note_text)}</i>",
+        parse_mode="HTML"
     )
 
 async def habit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -444,14 +445,14 @@ async def habit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if not context.args:
         await update.message.reply_text(
-            "😈 **Log an Unholy Habit via Command:**\n\n"
-            "Usage: `/habit <name> [units] [details]`\n\n"
+            "😈 <b>Log an Unholy Habit via Command:</b>\n\n"
+            "Usage: <code>/habit &lt;name&gt; [units] [details]</code>\n\n"
             "Examples:\n"
-            "• `/habit alcohol 2 two pints IPA`\n"
-            "• `/habit late_meal 1 pizza at 11pm`\n"
-            "• `/habit late_caffeine 1 espresso at 4pm`\n"
-            "• `/habit stress 1 high mental fatigue`",
-            parse_mode="Markdown"
+            "• <code>/habit alcohol 2 two pints IPA</code>\n"
+            "• <code>/habit late_meal 1 pizza at 11pm</code>\n"
+            "• <code>/habit late_caffeine 1 espresso at 4pm</code>\n"
+            "• <code>/habit stress 1 high mental fatigue</code>",
+            parse_mode="HTML"
         )
         return
     tag = context.args[0].lower().replace(" ", "_")
@@ -469,11 +470,11 @@ async def habit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db.log_activity(date_str=today_str, category="unholy_habit", tag=tag, note=note_text, value=val)
     tag_title = tag.replace("_", " ").title()
     await update.message.reply_text(
-        f"✅ **Unholy Habit Logged!**\n\n"
-        f"😈 **Habit:** {tag_title} ({val})\n"
-        f"📅 **Date:** `{today_str}`\n"
-        f"📝 **Details:** {note_text or 'Logged'}",
-        parse_mode="Markdown"
+        f"✅ <b>Unholy Habit Logged!</b>\n\n"
+        f"😈 <b>Habit:</b> {tag_title} ({val})\n"
+        f"📅 <b>Date:</b> <code>{today_str}</code>\n"
+        f"📝 <b>Details:</b> {html.escape(note_text) if note_text else 'Logged'}",
+        parse_mode="HTML"
     )
 
 # Handle text messages (free note logger)
@@ -497,115 +498,124 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     )
     
     await update.message.reply_text(
-        f"📝 **Free Note Logged!**\n"
-        f"📅 Date: `{today_str}`\n"
-        f"✍️ Note: _{text}_\n\n"
+        f"📝 <b>Free Note Logged!</b>\n"
+        f"📅 Date: <code>{today_str}</code>\n"
+        f"✍️ Note: <i>{html.escape(text)}</i>\n\n"
         f"Factored into your daily AI coaching recovery analysis.",
-        parse_mode="Markdown"
+        parse_mode="HTML"
     )
 
 # Callback Query Handler for inline buttons
 async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    if query:
-        try:
-            await query.answer()
-        except Exception:
-            pass
-            
+    if not query:
+        return
+    try:
+        await query.answer()
+    except Exception as e:
+        logger.warning(f"Callback answer warning: {e}")
+        
     if not await check_auth(update, context):
         return
         
     data = query.data
     today_str = date.today().isoformat()
     
-    if data == "menu_main":
-        text = (
-            f"✍️ **Daily Activity & Habit Logger**\n"
-            f"📅 Date: `{today_str}`\n\n"
-            "Choose an action below to log unholy habits, sleep disruptors, or custom free notes:"
-        )
-        await query.edit_message_text(text, reply_markup=get_main_log_keyboard(), parse_mode="Markdown")
-        
-    elif data == "menu_unholy":
-        text = (
-            f"😈 **Log an Unholy Habit / Disruptor**\n"
-            f"📅 Date: `{today_str}`\n\n"
-            "Select what you indulged in or experienced today:"
-        )
-        await query.edit_message_text(text, reply_markup=get_unholy_habits_keyboard(), parse_mode="Markdown")
-        
-    elif data == "unholy_alcohol_menu":
-        text = (
-            f"🍷 **Alcohol Intake**\n"
-            f"📅 Date: `{today_str}`\n\n"
-            "How many standard drinks did you have?"
-        )
-        await query.edit_message_text(text, reply_markup=get_alcohol_keyboard(), parse_mode="Markdown")
-        
-    elif data == "menu_note":
-        text = (
-            f"📝 **Write a Free Note**\n"
-            f"📅 Date: `{today_str}`\n\n"
-            "👇 **Type your note directly in the message box below and send it!**\n\n"
-            "Examples:\n"
-            "• _Sore quads from heavy squats_\n"
-            "• _Red eye flight, feeling exhausted_\n"
-            "• _Drank 3L water today, energetic_\n\n"
-            "_(Or use `/note <text>` anytime)_"
-        )
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="menu_main")]
-        ])
-        await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
-        
-    elif data == "menu_view_today":
-        logs = db.get_activity_logs(date_str=today_str, limit=20)
-        if not logs:
-            text = f"📋 **Today's Logs ({today_str}):**\n\nNo habits or notes logged for today yet."
-        else:
-            text = f"📋 **Today's Logs ({today_str}):**\n\n"
-            for l in logs:
-                icon = "😈" if l.get("category") == "unholy_habit" else "📝"
-                tag_title = l.get("tag", "").replace("_", " ").title()
-                val = f" ({l['value']})" if l.get("value") is not None else ""
-                note = f"\n   _{l['note']}_" if l.get("note") else ""
-                text += f"• {icon} **{tag_title}**{val}{note}\n"
-        
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="menu_main")]
-        ])
-        await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
-        
-    elif data.startswith("log_habit:"):
-        parts = data.split(":")
-        tag = parts[1]
-        val = float(parts[2]) if len(parts) > 2 and parts[2] else 1.0
-        note = parts[3] if len(parts) > 3 else ""
-        
-        db.log_activity(
-            date_str=today_str,
-            category="unholy_habit",
-            tag=tag,
-            note=note,
-            value=val
-        )
-        
-        tag_title = tag.replace("_", " ").title()
-        text = (
-            f"✅ **Unholy Habit Logged!**\n\n"
-            f"😈 **Habit:** {tag_title}\n"
-            f"📅 **Date:** `{today_str}`\n"
-            f"📝 **Details:** {note}\n\n"
-            f"Hermes Coach will correlate this with tomorrow's sleep and HRV recovery."
-        )
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("➕ Log Another Habit", callback_data="menu_unholy"),
-                InlineKeyboardButton("📋 View Today's Logs", callback_data="menu_view_today")
-            ]
-        ])
-        await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
+    try:
+        if data == "menu_main":
+            text = (
+                f"✍️ <b>Daily Activity & Habit Logger</b>\n"
+                f"📅 Date: <code>{today_str}</code>\n\n"
+                "Choose an action below to log unholy habits, sleep disruptors, or custom free notes:"
+            )
+            await query.edit_message_text(text, reply_markup=get_main_log_keyboard(), parse_mode="HTML")
+            
+        elif data == "menu_unholy":
+            text = (
+                f"😈 <b>Log an Unholy Habit / Disruptor</b>\n"
+                f"📅 Date: <code>{today_str}</code>\n\n"
+                "Select what you indulged in or experienced today:"
+            )
+            await query.edit_message_text(text, reply_markup=get_unholy_habits_keyboard(), parse_mode="HTML")
+            
+        elif data == "unholy_alcohol_menu":
+            text = (
+                f"🍷 <b>Alcohol Intake</b>\n"
+                f"📅 Date: <code>{today_str}</code>\n\n"
+                "How many standard drinks did you have?"
+            )
+            await query.edit_message_text(text, reply_markup=get_alcohol_keyboard(), parse_mode="HTML")
+            
+        elif data == "menu_note":
+            text = (
+                f"📝 <b>Write a Free Note</b>\n"
+                f"📅 Date: <code>{today_str}</code>\n\n"
+                "👇 <b>Type your note directly in the message box below and send it!</b>\n\n"
+                "Examples:\n"
+                "• <i>Sore quads from heavy squats</i>\n"
+                "• <i>Red eye flight, feeling exhausted</i>\n"
+                "• <i>Drank 3L water today, energetic</i>\n\n"
+                "💡 <i>Or use <code>/note &lt;text&gt;</code> anytime.</i>"
+            )
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="menu_main")]
+            ])
+            await query.edit_message_text(text, reply_markup=keyboard, parse_mode="HTML")
+            
+        elif data == "menu_view_today":
+            logs = db.get_activity_logs(date_str=today_str, limit=20)
+            if not logs:
+                text = f"📋 <b>Today's Logs ({today_str}):</b>\n\nNo habits or notes logged for today yet."
+            else:
+                text = f"📋 <b>Today's Logs ({today_str}):</b>\n\n"
+                for l in logs:
+                    icon = "😈" if l.get("category") == "unholy_habit" else "📝"
+                    tag_title = l.get("tag", "").replace("_", " ").title()
+                    val = f" ({l['value']})" if l.get("value") is not None else ""
+                    note = f"\n   <i>{html.escape(str(l['note']))}</i>" if l.get("note") else ""
+                    text += f"• {icon} <b>{tag_title}</b>{val}{note}\n"
+            
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="menu_main")]
+            ])
+            await query.edit_message_text(text, reply_markup=keyboard, parse_mode="HTML")
+            
+        elif data.startswith("log_habit:"):
+            parts = data.split(":")
+            tag = parts[1]
+            val = float(parts[2]) if len(parts) > 2 and parts[2] else 1.0
+            note = parts[3] if len(parts) > 3 else ""
+            
+            db.log_activity(
+                date_str=today_str,
+                category="unholy_habit",
+                tag=tag,
+                note=note,
+                value=val
+            )
+            
+            tag_title = tag.replace("_", " ").title()
+            text = (
+                f"✅ <b>Unholy Habit Logged!</b>\n\n"
+                f"😈 <b>Habit:</b> {tag_title} ({val})\n"
+                f"📅 <b>Date:</b> <code>{today_str}</code>\n"
+                f"📝 <b>Details:</b> {html.escape(note) if note else 'Logged'}\n\n"
+                f"Hermes Coach will correlate this with tomorrow's sleep and HRV recovery."
+            )
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("➕ Log Another Habit", callback_data="menu_unholy"),
+                    InlineKeyboardButton("📋 View Today's Logs", callback_data="menu_view_today")
+                ]
+            ])
+            await query.edit_message_text(text, reply_markup=keyboard, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Error handling callback query '{data}': {e}", exc_info=True)
+        try:
+            # Fallback plain text edit if anything failed
+            await query.edit_message_text(f"Action processed: {data}")
+        except Exception:
+            pass
 
 # ---------- DAILY AUTOMATED PUSH FUNCTION ----------
 
