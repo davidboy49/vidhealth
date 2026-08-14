@@ -682,64 +682,89 @@ with tab_today:
 
     # Today's Activity & Habit Logs Section
     st.markdown("<div style='margin-bottom: 24px;'></div>", unsafe_allow_html=True)
-    st.markdown(f"<h3 style='font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 12px; display: flex; align-items: center;'>{LUCIDE_ACTIVITY} Daily Habits & Notes</h3>", unsafe_allow_html=True)
+    st.markdown(f"<h3 style='font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 12px; display: flex; align-items: center;'>{LUCIDE_ACTIVITY} Daily Habits & Activity Notes</h3>", unsafe_allow_html=True)
     
-    today_iso = str(latest_df.get("date") or date.today().isoformat())
-    today_logs = db.get_activity_logs(date_str=today_iso, limit=20)
+    actual_today_iso = date.today().isoformat()
+    metric_date_iso = str(latest_df.get("date") or actual_today_iso)
     
     col_logs_view, col_logs_add = st.columns([3, 2])
     with col_logs_view:
-        if not today_logs:
+        view_filter = st.radio(
+            "Filter Logs",
+            [f"Today ({actual_today_iso})", f"Latest Metric Date ({metric_date_iso})", "All Recent Logs"],
+            horizontal=True,
+            label_visibility="collapsed"
+        )
+        
+        if "Today" in view_filter:
+            display_logs = db.get_activity_logs(date_str=actual_today_iso, limit=20)
+            view_label = f"today ({actual_today_iso})"
+        elif "Latest Metric" in view_filter:
+            display_logs = db.get_activity_logs(date_str=metric_date_iso, limit=20)
+            view_label = f"metric date ({metric_date_iso})"
+        else:
+            display_logs = db.get_activity_logs(limit=20)
+            view_label = "recent days"
+            
+        if not display_logs:
             st.markdown(f"""
             <div class="shadcn-card" style="padding: 20px; color: var(--muted-foreground); font-size: 0.875rem;">
-                No unholy habits or free notes logged for {today_iso} yet.
+                No unholy habits or free notes recorded for {view_label}.
                 <div style="font-size: 0.75rem; margin-top: 6px; color: var(--muted-foreground);">
-                    Tip: You can log quickly from Telegram with <code>/log</code> or by texting the bot!
+                    Tip: You can log quickly from Telegram with <code>/log</code>, by texting the bot directly, or using the quick logger on the right!
                 </div>
             </div>
             """, unsafe_allow_html=True)
         else:
             log_items = []
-            for l in today_logs:
+            for l in display_logs:
                 icon = "😈" if l.get("category") == "unholy_habit" else "📝"
                 tag_name = l.get("tag", "").replace("_", " ").title()
                 val_text = f" ({l['value']})" if l.get("value") is not None else ""
                 note_text = f" — <span style='color: var(--muted-foreground); font-style: italic;'>{l['note']}</span>" if l.get("note") else ""
-                time_str = l.get("timestamp", "").split()[-1] if " " in str(l.get("timestamp", "")) else ""
-                log_items.append(f"<div style='font-size: 0.875rem; padding: 6px 0; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between;'><span>{icon} <strong>{tag_name}</strong>{val_text}{note_text}</span><span style='font-size: 0.75rem; color: var(--muted-foreground);'>{time_str}</span></div>")
+                time_str = l.get("timestamp", "")
+                log_date = l.get("date", "")
+                log_items.append(
+                    f"<div style='font-size: 0.875rem; padding: 8px 0; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;'>"
+                    f"<span>{icon} <strong>{tag_name}</strong>{val_text}{note_text}</span>"
+                    f"<span style='font-size: 0.75rem; color: var(--muted-foreground);'>{log_date} {time_str.split()[-1] if ' ' in time_str else ''}</span>"
+                    f"</div>"
+                )
             
             st.markdown(f"""
-            <div class="shadcn-card" style="padding: 20px; display: flex; flex-direction: column; gap: 4px;">
+            <div class="shadcn-card" style="padding: 20px; display: flex; flex-direction: column; gap: 4px; max-height: 280px; overflow-y: auto;">
                 {''.join(log_items)}
             </div>
             """, unsafe_allow_html=True)
             
     with col_logs_add:
-        with st.expander("➕ Log Habit or Note for Today", expanded=False):
-            with st.form("quick_log_form", clear_on_submit=True):
-                log_type = st.selectbox("Category", ["Unholy Habit", "Free Note"])
-                if log_type == "Unholy Habit":
-                    habit_tag = st.selectbox("Habit", ["Alcohol", "Late Meal", "Late Caffeine", "Late Screen Time", "Nicotine", "High Mental Stress"])
-                    habit_val = st.number_input("Count / Units (e.g. drinks)", min_value=1.0, max_value=20.0, value=1.0, step=1.0)
-                    habit_note = st.text_input("Details / Note (optional)", placeholder="e.g. 2 glasses red wine")
-                else:
-                    habit_tag = "note"
-                    habit_val = None
-                    habit_note = st.text_area("Note", placeholder="e.g. Red eye flight, heavy squat session, sore neck")
+        with st.expander("➕ Quick Log Habit or Note", expanded=True):
+            log_date_val = st.date_input("Entry Date", value=date.today())
+            log_type = st.selectbox("Category", ["😈 Unholy Habit", "📝 Free Note"], key="quick_log_cat")
+            
+            if "Unholy Habit" in log_type:
+                habit_tag = st.selectbox("Habit", ["Alcohol", "Late Meal", "Late Caffeine", "Late Screen Time", "Nicotine", "High Mental Stress"], key="quick_habit_tag")
+                habit_val = st.number_input("Count / Units (e.g. drinks)", min_value=1.0, max_value=20.0, value=1.0, step=1.0, key="quick_habit_val")
+                habit_note = st.text_input("Details / Note (optional)", placeholder="e.g. 2 glasses red wine", key="quick_habit_note")
+            else:
+                habit_tag = "note"
+                habit_val = None
+                habit_note = st.text_area("Note Content", placeholder="e.g. Red eye flight, heavy squat session, feeling fatigued", key="quick_note_content")
+            
+            if st.button("Save Entry", key="quick_log_submit_btn", type="primary", use_container_width=True):
+                cat_key = "unholy_habit" if "Unholy Habit" in log_type else "free_note"
+                tag_key = habit_tag.lower().replace(" ", "_") if "Unholy Habit" in log_type else "note"
+                entry_date_str = log_date_val.isoformat()
                 
-                submitted = st.form_submit_button("Save Log", use_container_width=True)
-                if submitted:
-                    cat_key = "unholy_habit" if log_type == "Unholy Habit" else "free_note"
-                    tag_key = habit_tag.lower().replace(" ", "_") if log_type == "Unholy Habit" else "note"
-                    db.log_activity(
-                        date_str=today_iso,
-                        category=cat_key,
-                        tag=tag_key,
-                        note=habit_note,
-                        value=habit_val if log_type == "Unholy Habit" else None
-                    )
-                    st.success("Log saved!")
-                    st.rerun()
+                db.log_activity(
+                    date_str=entry_date_str,
+                    category=cat_key,
+                    tag=tag_key,
+                    note=habit_note,
+                    value=habit_val if "Unholy Habit" in log_type else None
+                )
+                st.success(f"Saved {habit_tag if 'Unholy Habit' in log_type else 'note'} for {entry_date_str}!")
+                st.rerun()
 
 # ==================== TAB 2: TREND ANALYSIS ====================
 with tab_trends:
