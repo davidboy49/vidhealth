@@ -1583,7 +1583,7 @@ with tab_spo2:
         st.markdown("<h4 style='font-size: 1.05rem; font-weight: 600; color: var(--foreground); margin-bottom: 8px;'>Exact Drop Event Log for This Night</h4>", unsafe_allow_html=True)
 
         if drop_events:
-            table_rows = []
+            table_rows_html = []
             for i, ev in enumerate(drop_events, 1):
                 sev_badge = (
                     "<span style='background:#ef444420; color:#ef4444; font-weight:600; padding:2px 8px; border-radius:9999px;'>🚨 Critical</span>"
@@ -1592,60 +1592,41 @@ with tab_spo2:
                      if ev["severity"] == "WARNING" else
                      "<span style='background:#3b82f620; color:#3b82f6; font-weight:600; padding:2px 8px; border-radius:9999px;'>🔹 Mild</span>")
                 )
-                table_rows.append({
-                    "Event #": f"#{i}",
-                    "Onset Time": ev.get("start_time", "—"),
-                    "Exact Nadir Moment": f"<b>{ev.get('nadir_time', '—')}</b>",
-                    "Recovery Time": ev.get("end_time", "—"),
-                    "Nadir SpO2": f"<b style='color:#ef4444;'>{ev.get('nadir_spo2')}%</b>",
-                    "Drop Magnitude": f"-{ev.get('drop_magnitude')} %",
-                    "Duration": f"{ev.get('duration_seconds')}s",
-                    "Sleep Stage": ev.get("sleep_stage", "Sleep"),
-                    "Respiration": f"{ev.get('respiration_rate') or '—'} brpm",
-                    "Clinical Severity": sev_badge
-                })
+                res_val = f"{ev.get('respiration_rate')} brpm" if ev.get('respiration_rate') else "—"
+                table_rows_html.append(
+                    f"<tr style='border-bottom: 1px solid var(--border); color: var(--foreground);'>"
+                    f"<td style='padding: 8px 12px;'>#{i}</td>"
+                    f"<td style='padding: 8px 12px;'>{ev.get('start_time', '—')}</td>"
+                    f"<td style='padding: 8px 12px; font-weight: 700;'>{ev.get('nadir_time', '—')}</td>"
+                    f"<td style='padding: 8px 12px;'>{ev.get('end_time', '—')}</td>"
+                    f"<td style='padding: 8px 12px; font-weight: 700; color: #ef4444;'>{ev.get('nadir_spo2')}%</td>"
+                    f"<td style='padding: 8px 12px;'>-{ev.get('drop_magnitude')} %</td>"
+                    f"<td style='padding: 8px 12px;'>{ev.get('duration_seconds')}s</td>"
+                    f"<td style='padding: 8px 12px;'><span style='background:#8b5cf620; color:#a78bfa; padding:2px 6px; border-radius:4px; font-weight:600; font-size:0.75rem;'>{ev.get('sleep_stage', 'Sleep')}</span></td>"
+                    f"<td style='padding: 8px 12px;'>{res_val}</td>"
+                    f"<td style='padding: 8px 12px;'>{sev_badge}</td>"
+                    f"</tr>"
+                )
 
-            table_df = pd.DataFrame(table_rows)
-            st.markdown(
-                f"""
-                <div class="shadcn-card" style="padding: 12px; overflow-x: auto;">
-                    <table style="width: 100%; border-collapse: collapse; font-size: 0.85rem; text-align: left;">
-                        <thead>
-                            <tr style="border-bottom: 1px solid var(--border); color: var(--muted-foreground);">
-                                <th style="padding: 8px 12px;">Event</th>
-                                <th style="padding: 8px 12px;">Onset</th>
-                                <th style="padding: 8px 12px;">Exact Nadir Moment</th>
-                                <th style="padding: 8px 12px;">Recovery</th>
-                                <th style="padding: 8px 12px;">Nadir SpO2</th>
-                                <th style="padding: 8px 12px;">Drop Depth</th>
-                                <th style="padding: 8px 12px;">Duration</th>
-                                <th style="padding: 8px 12px;">Sleep Stage</th>
-                                <th style="padding: 8px 12px;">Respiration</th>
-                                <th style="padding: 8px 12px;">Severity</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {''.join([
-                                f"<tr style='border-bottom: 1px solid var(--border); color: var(--foreground);'>" +
-                                f"<td style='padding: 8px 12px;'>{r['Event #']}</td>" +
-                                f"<td style='padding: 8px 12px;'>{r['Onset Time']}</td>" +
-                                f"<td style='padding: 8px 12px;'>{r['Exact Nadir Moment']}</td>" +
-                                f"<td style='padding: 8px 12px;'>{r['Recovery Time']}</td>" +
-                                f"<td style='padding: 8px 12px;'>{r['Nadir SpO2']}</td>" +
-                                f"<td style='padding: 8px 12px;'>{r['Drop Magnitude']}</td>" +
-                                f"<td style='padding: 8px 12px;'>{r['Duration']}</td>" +
-                                f"<td style='padding: 8px 12px;'>{r['Sleep Stage']}</td>" +
-                                f"<td style='padding: 8px 12px;'>{r['Respiration']}</td>" +
-                                f"<td style='padding: 8px 12px;'>{r['Clinical Severity']}</td>" +
-                                "</tr>"
-                                for _, r in table_df.iterrows()
-                            ])}
-                        </tbody>
-                    </table>
-                </div>
-                """,
-                unsafe_allow_html=True
+            single_table_html = (
+                "<div class='shadcn-card' style='padding: 12px; overflow-x: auto;'>"
+                "<table style='width: 100%; border-collapse: collapse; font-size: 0.85rem; text-align: left;'>"
+                "<thead><tr style='border-bottom: 1px solid var(--border); color: var(--muted-foreground);'>"
+                "<th style='padding: 8px 12px;'>Event</th>"
+                "<th style='padding: 8px 12px;'>Onset</th>"
+                "<th style='padding: 8px 12px;'>Exact Nadir Moment</th>"
+                "<th style='padding: 8px 12px;'>Recovery</th>"
+                "<th style='padding: 8px 12px;'>Nadir SpO2</th>"
+                "<th style='padding: 8px 12px;'>Drop Depth</th>"
+                "<th style='padding: 8px 12px;'>Duration</th>"
+                "<th style='padding: 8px 12px;'>Sleep Stage</th>"
+                "<th style='padding: 8px 12px;'>Respiration</th>"
+                "<th style='padding: 8px 12px;'>Severity</th>"
+                "</tr></thead>"
+                f"<tbody>{''.join(table_rows_html)}</tbody>"
+                "</table></div>"
             )
+            st.markdown(single_table_html, unsafe_allow_html=True)
         else:
             st.success("✅ No nocturnal oxygen desaturation incidents registered for this night. Blood oxygenation remained stable.")
 
@@ -1715,44 +1696,41 @@ with tab_spo2:
                      if r["severity"] == "WARNING" else
                      "<span style='background:#3b82f620; color:#3b82f6; font-weight:600; padding:2px 8px; border-radius:9999px;'>🔹 Mild</span>")
                 )
-                m_rows.append(f"""
-                <tr style='border-bottom: 1px solid var(--border); color: var(--foreground);'>
-                    <td style='padding: 8px 12px; font-weight: 600;'>{r['date']}</td>
-                    <td style='padding: 8px 12px;'>{r['start_time']}</td>
-                    <td style='padding: 8px 12px; font-weight: 700; color: var(--foreground);'>{r['nadir_time']}</td>
-                    <td style='padding: 8px 12px;'>{r['end_time']}</td>
-                    <td style='padding: 8px 12px; font-weight: 700; color: #ef4444;'>{r['nadir_spo2']}%</td>
-                    <td style='padding: 8px 12px;'>-{r['drop_magnitude']}%</td>
-                    <td style='padding: 8px 12px;'>{int(r['duration_seconds'])}s</td>
-                    <td style='padding: 8px 12px;'><span style='background: #8b5cf620; color: #a78bfa; padding: 2px 6px; border-radius: 4px; font-weight: 600; font-size: 0.75rem;'>{r['sleep_stage']}</span></td>
-                    <td style='padding: 8px 12px;'>{r['respiration_rate'] or '—'} brpm</td>
-                    <td style='padding: 8px 12px;'>{s_badge}</td>
-                </tr>
-                """)
+                r_resp = f"{r['respiration_rate']} brpm" if r.get('respiration_rate') else "—"
+                m_rows.append(
+                    f"<tr style='border-bottom: 1px solid var(--border); color: var(--foreground);'>"
+                    f"<td style='padding: 8px 12px; font-weight: 600;'>{r['date']}</td>"
+                    f"<td style='padding: 8px 12px;'>{r['start_time']}</td>"
+                    f"<td style='padding: 8px 12px; font-weight: 700; color: var(--foreground);'>{r['nadir_time']}</td>"
+                    f"<td style='padding: 8px 12px;'>{r['end_time']}</td>"
+                    f"<td style='padding: 8px 12px; font-weight: 700; color: #ef4444;'>{r['nadir_spo2']}%</td>"
+                    f"<td style='padding: 8px 12px;'>-{r['drop_magnitude']}%</td>"
+                    f"<td style='padding: 8px 12px;'>{int(r['duration_seconds'])}s</td>"
+                    f"<td style='padding: 8px 12px;'><span style='background: #8b5cf620; color: #a78bfa; padding: 2px 6px; border-radius: 4px; font-weight: 600; font-size: 0.75rem;'>{r['sleep_stage']}</span></td>"
+                    f"<td style='padding: 8px 12px;'>{r_resp}</td>"
+                    f"<td style='padding: 8px 12px;'>{s_badge}</td>"
+                    f"</tr>"
+                )
 
-            st.markdown(f"""
-            <div class="shadcn-card" style="padding: 12px; overflow-x: auto; max-height: 420px; overflow-y: auto;">
-                <table style="width: 100%; border-collapse: collapse; font-size: 0.85rem; text-align: left;">
-                    <thead>
-                        <tr style="border-bottom: 1px solid var(--border); color: var(--muted-foreground); position: sticky; top: 0; background: var(--background);">
-                            <th style="padding: 8px 12px;">Date</th>
-                            <th style="padding: 8px 12px;">Onset</th>
-                            <th style="padding: 8px 12px;">Exact Nadir Moment</th>
-                            <th style="padding: 8px 12px;">Recovery</th>
-                            <th style="padding: 8px 12px;">Nadir SpO2</th>
-                            <th style="padding: 8px 12px;">Drop Depth</th>
-                            <th style="padding: 8px 12px;">Duration</th>
-                            <th style="padding: 8px 12px;">Sleep Stage</th>
-                            <th style="padding: 8px 12px;">Respiration</th>
-                            <th style="padding: 8px 12px;">Severity</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {''.join(m_rows)}
-                    </tbody>
-                </table>
-            </div>
-            """, unsafe_allow_html=True)
+            feed_table_html = (
+                "<div class='shadcn-card' style='padding: 12px; overflow-x: auto; max-height: 420px; overflow-y: auto;'>"
+                "<table style='width: 100%; border-collapse: collapse; font-size: 0.85rem; text-align: left;'>"
+                "<thead><tr style='border-bottom: 1px solid var(--border); color: var(--muted-foreground); position: sticky; top: 0; background: var(--background);'>"
+                "<th style='padding: 8px 12px;'>Date</th>"
+                "<th style='padding: 8px 12px;'>Onset</th>"
+                "<th style='padding: 8px 12px;'>Exact Nadir Moment</th>"
+                "<th style='padding: 8px 12px;'>Recovery</th>"
+                "<th style='padding: 8px 12px;'>Nadir SpO2</th>"
+                "<th style='padding: 8px 12px;'>Drop Depth</th>"
+                "<th style='padding: 8px 12px;'>Duration</th>"
+                "<th style='padding: 8px 12px;'>Sleep Stage</th>"
+                "<th style='padding: 8px 12px;'>Respiration</th>"
+                "<th style='padding: 8px 12px;'>Severity</th>"
+                "</tr></thead>"
+                f"<tbody>{''.join(m_rows)}</tbody>"
+                "</table></div>"
+            )
+            st.markdown(feed_table_html, unsafe_allow_html=True)
         else:
             st.info("No historical desaturation events match the selected filter criteria.")
 
@@ -1790,42 +1768,37 @@ with tab_spo2:
 
             n_rows = []
             for item in grouped_nights:
-                n_rows.append(f"""
-                <tr style='border-bottom: 1px solid var(--border); color: var(--foreground);'>
-                    <td style='padding: 8px 12px; font-weight: 600;'>{item['date']}</td>
-                    <td style='padding: 8px 12px; font-weight: 600;'>{item['total_drops']} drops</td>
-                    <td style='padding: 8px 12px; font-weight: 700; color: #ef4444;'>{item['lowest_nadir']}%</td>
-                    <td style='padding: 8px 12px;'><code>{item['nadir_moment']}</code></td>
-                    <td style='padding: 8px 12px;'>{item['avg_duration']}s</td>
-                    <td style='padding: 8px 12px; font-weight: 700; color: {item['status_color']};'>{item['odi_score']} / hr</td>
-                    <td style='padding: 8px 12px;'>
-                        <span style='background: {item['status_color']}20; color: {item['status_color']}; padding: 2px 8px; border-radius: 9999px; font-weight: 600; font-size: 0.75rem;'>
-                            {item['classification']}
-                        </span>
-                    </td>
-                </tr>
-                """)
+                n_rows.append(
+                    f"<tr style='border-bottom: 1px solid var(--border); color: var(--foreground);'>"
+                    f"<td style='padding: 8px 12px; font-weight: 600;'>{item['date']}</td>"
+                    f"<td style='padding: 8px 12px; font-weight: 600;'>{item['total_drops']} drops</td>"
+                    f"<td style='padding: 8px 12px; font-weight: 700; color: #ef4444;'>{item['lowest_nadir']}%</td>"
+                    f"<td style='padding: 8px 12px;'><code>{item['nadir_moment']}</code></td>"
+                    f"<td style='padding: 8px 12px;'>{item['avg_duration']}s</td>"
+                    f"<td style='padding: 8px 12px; font-weight: 700; color: {item['status_color']};'>{item['odi_score']} / hr</td>"
+                    f"<td style='padding: 8px 12px;'>"
+                    f"<span style='background: {item['status_color']}20; color: {item['status_color']}; padding: 2px 8px; border-radius: 9999px; font-weight: 600; font-size: 0.75rem;'>"
+                    f"{item['classification']}"
+                    f"</span></td>"
+                    f"</tr>"
+                )
 
-            st.markdown(f"""
-            <div class="shadcn-card" style="padding: 12px; overflow-x: auto;">
-                <table style="width: 100%; border-collapse: collapse; font-size: 0.85rem; text-align: left;">
-                    <thead>
-                        <tr style="border-bottom: 1px solid var(--border); color: var(--muted-foreground);">
-                            <th style="padding: 8px 12px;">Night / Date</th>
-                            <th style="padding: 8px 12px;">Total Drops</th>
-                            <th style="padding: 8px 12px;">Lowest SpO2</th>
-                            <th style="padding: 8px 12px;">Worst Moment</th>
-                            <th style="padding: 8px 12px;">Avg Duration</th>
-                            <th style="padding: 8px 12px;">ODI Index</th>
-                            <th style="padding: 8px 12px;">Classification</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {''.join(n_rows)}
-                    </tbody>
-                </table>
-            </div>
-            """, unsafe_allow_html=True)
+            night_table_html = (
+                "<div class='shadcn-card' style='padding: 12px; overflow-x: auto;'>"
+                "<table style='width: 100%; border-collapse: collapse; font-size: 0.85rem; text-align: left;'>"
+                "<thead><tr style='border-bottom: 1px solid var(--border); color: var(--muted-foreground);'>"
+                "<th style='padding: 8px 12px;'>Night / Date</th>"
+                "<th style='padding: 8px 12px;'>Total Drops</th>"
+                "<th style='padding: 8px 12px;'>Lowest SpO2</th>"
+                "<th style='padding: 8px 12px;'>Worst Moment</th>"
+                "<th style='padding: 8px 12px;'>Avg Duration</th>"
+                "<th style='padding: 8px 12px;'>ODI Index</th>"
+                "<th style='padding: 8px 12px;'>Classification</th>"
+                "</tr></thead>"
+                f"<tbody>{''.join(n_rows)}</tbody>"
+                "</table></div>"
+            )
+            st.markdown(night_table_html, unsafe_allow_html=True)
         else:
             st.info("No night-by-night desaturation trends available yet.")
 
@@ -1940,47 +1913,43 @@ with tab_spo2:
                     top_stage = w_df["sleep_stage"].mode()[0] if not w_df["sleep_stage"].empty else "—"
                     mean_resp = f"{round(w_df['respiration_rate'].mean(), 1)} brpm" if w_df["respiration_rate"].notna().any() else "—"
                     
-                    hour_summary_rows.append(f"""
-                    <tr style='border-bottom: 1px solid var(--border); color: var(--foreground);'>
-                        <td style='padding: 8px 12px; font-weight: 600;'>{label}</td>
-                        <td style='padding: 8px 12px; font-weight: 700; color: #ef4444;'>{count} drops ({pct}%)</td>
-                        <td style='padding: 8px 12px;'>{avg_nad}%</td>
-                        <td style='padding: 8px 12px;'><code>{worst_desc}</code></td>
-                        <td style='padding: 8px 12px;'><span style='background: #8b5cf620; color: #a78bfa; padding: 2px 6px; border-radius: 4px; font-weight: 600; font-size: 0.75rem;'>{top_stage}</span></td>
-                        <td style='padding: 8px 12px;'>{mean_resp}</td>
-                    </tr>
-                    """)
+                    hour_summary_rows.append(
+                        f"<tr style='border-bottom: 1px solid var(--border); color: var(--foreground);'>"
+                        f"<td style='padding: 8px 12px; font-weight: 600;'>{label}</td>"
+                        f"<td style='padding: 8px 12px; font-weight: 700; color: #ef4444;'>{count} drops ({pct}%)</td>"
+                        f"<td style='padding: 8px 12px;'>{avg_nad}%</td>"
+                        f"<td style='padding: 8px 12px;'><code>{worst_desc}</code></td>"
+                        f"<td style='padding: 8px 12px;'><span style='background: #8b5cf620; color: #a78bfa; padding: 2px 6px; border-radius: 4px; font-weight: 600; font-size: 0.75rem;'>{top_stage}</span></td>"
+                        f"<td style='padding: 8px 12px;'>{mean_resp}</td>"
+                        f"</tr>"
+                    )
                 else:
-                    hour_summary_rows.append(f"""
-                    <tr style='border-bottom: 1px solid var(--border); color: var(--muted-foreground);'>
-                        <td style='padding: 8px 12px; font-weight: 600;'>{label}</td>
-                        <td style='padding: 8px 12px;'>0 drops (0%)</td>
-                        <td style='padding: 8px 12px;'>—</td>
-                        <td style='padding: 8px 12px;'>—</td>
-                        <td style='padding: 8px 12px;'>—</td>
-                        <td style='padding: 8px 12px;'>—</td>
-                    </tr>
-                    """)
+                    hour_summary_rows.append(
+                        f"<tr style='border-bottom: 1px solid var(--border); color: var(--muted-foreground);'>"
+                        f"<td style='padding: 8px 12px; font-weight: 600;'>{label}</td>"
+                        f"<td style='padding: 8px 12px;'>0 drops (0%)</td>"
+                        f"<td style='padding: 8px 12px;'>—</td>"
+                        f"<td style='padding: 8px 12px;'>—</td>"
+                        f"<td style='padding: 8px 12px;'>—</td>"
+                        f"<td style='padding: 8px 12px;'>—</td>"
+                        f"</tr>"
+                    )
 
-            st.markdown(f"""
-            <div class="shadcn-card" style="padding: 12px; overflow-x: auto;">
-                <table style="width: 100%; border-collapse: collapse; font-size: 0.85rem; text-align: left;">
-                    <thead>
-                        <tr style="border-bottom: 1px solid var(--border); color: var(--muted-foreground);">
-                            <th style="padding: 8px 12px;">Time Window</th>
-                            <th style="padding: 8px 12px;">Drop Frequency</th>
-                            <th style="padding: 8px 12px;">Avg Nadir SpO2</th>
-                            <th style="padding: 8px 12px;">Worst Moment Recorded</th>
-                            <th style="padding: 8px 12px;">Dominant Sleep Stage</th>
-                            <th style="padding: 8px 12px;">Mean Respiration</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {''.join(hour_summary_rows)}
-                    </tbody>
-                </table>
-            </div>
-            """, unsafe_allow_html=True)
+            clustering_table_html = (
+                "<div class='shadcn-card' style='padding: 12px; overflow-x: auto;'>"
+                "<table style='width: 100%; border-collapse: collapse; font-size: 0.85rem; text-align: left;'>"
+                "<thead><tr style='border-bottom: 1px solid var(--border); color: var(--muted-foreground);'>"
+                "<th style='padding: 8px 12px;'>Time Window</th>"
+                "<th style='padding: 8px 12px;'>Drop Frequency</th>"
+                "<th style='padding: 8px 12px;'>Avg Nadir SpO2</th>"
+                "<th style='padding: 8px 12px;'>Worst Moment Recorded</th>"
+                "<th style='padding: 8px 12px;'>Dominant Sleep Stage</th>"
+                "<th style='padding: 8px 12px;'>Mean Respiration</th>"
+                "</tr></thead>"
+                f"<tbody>{''.join(hour_summary_rows)}</tbody>"
+                "</table></div>"
+            )
+            st.markdown(clustering_table_html, unsafe_allow_html=True)
 
         st.markdown("<div style='height: 20px;'></div>", unsafe_allow_html=True)
         with st.expander("🩺 Clinical Interpretation & Nocturnal Airway Guidance", expanded=False):
