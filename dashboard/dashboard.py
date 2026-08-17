@@ -406,10 +406,11 @@ def clean_text(value):
     text = str(value).strip()
     return "" if text.lower() in {"nan", "none", "nat", "<na>"} else text
 # ---------- TABS (EMOJI-LESS PLAIN TEXT HEADERS) ----------
-tab_today, tab_trends, tab_spo2, tab_comp, tab_ai, tab_recovery, tab_data = st.tabs([
+tab_today, tab_trends, tab_spo2, tab_activities, tab_comp, tab_ai, tab_recovery, tab_data = st.tabs([
     "Today", 
     "Trends", 
     "Oxygen & Respiration",
+    "Activities",
     "Body Comp",
     "AI Insights", 
     "Recovery Forecast",
@@ -1964,7 +1965,221 @@ with tab_spo2:
             """)
 
 
-# ==================== TAB 4: BODY COMPOSITION ====================
+# ==================== TAB 4: ACTIVITIES & WORKOUTS ====================
+with tab_activities:
+    st.markdown(f"<h3 style='font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 6px; display: flex; align-items: center;'>{LUCIDE_ACTIVITY} Recorded Activities & Workouts</h3>", unsafe_allow_html=True)
+    st.markdown("<p style='font-size: 0.875rem; color: var(--muted-foreground); margin: 0 0 18px 0;'>Interactive session logs, heart rate intensity, paces, elevation, and training load for all Garmin recorded workouts.</p>", unsafe_allow_html=True)
+
+    raw_act_df = db.get_activities_df(days=None)
+
+    if raw_act_df.empty:
+        st.markdown(f"""
+        <div class="shadcn-alert" style="border-left: 4px solid #6366f1;">
+            <div style="display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 0.875rem;">{LUCIDE_ACTIVITY} No Garmin workout sessions found</div>
+            <p style="font-size: 0.875rem; margin: 4px 0 0 0; line-height: 1.5; color: var(--muted-foreground);">
+                Click <b>Sync Garmin</b> in the top right to download your latest workout sessions (Running, Walking, Gym Strength, Cycling, etc.) or backfill history with <code>python sync.py backfill 30</code>.
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        act_df = raw_act_df.copy()
+        act_df["date_dt"] = pd.to_datetime(act_df["date"], errors="coerce")
+        act_df = act_df.dropna(subset=["date_dt"])
+
+        # Derived Columns
+        act_df["distance_km"] = (act_df["distance_meters"].fillna(0) / 1000.0).round(2)
+        
+        def format_dur(sec):
+            if pd.isna(sec) or sec is None or sec <= 0:
+                return "-"
+            s = int(round(sec))
+            h = s // 3600
+            m = (s % 3600) // 60
+            s_rem = s % 60
+            if h > 0:
+                return f"{h}h {m:02d}m {s_rem:02d}s"
+            return f"{m}m {s_rem:02d}s"
+
+        def format_pace(speed_mps):
+            if pd.isna(speed_mps) or speed_mps is None or speed_mps <= 0.3:
+                return "-"
+            sec_per_km = 1000.0 / speed_mps
+            if sec_per_km > 3600 or sec_per_km < 90:
+                return "-"
+            m = int(sec_per_km // 60)
+            s = int(sec_per_km % 60)
+            return f"{m}:{s:02d} /km"
+
+        act_df["duration_str"] = act_df["duration_seconds"].apply(format_dur)
+        act_df["avg_pace"] = act_df["avg_speed"].apply(format_pace)
+        act_df["avg_speed_kmh"] = (act_df["avg_speed"].fillna(0) * 3.6).round(1)
+        act_df["max_speed_kmh"] = (act_df["max_speed"].fillna(0) * 3.6).round(1)
+        act_df["type_clean"] = act_df["activity_type"].fillna("unknown").str.replace("_", " ").str.title()
+        act_df["calories_int"] = act_df["calories"].fillna(0).round(0).astype(int)
+        act_df["elevation_m"] = act_df["elevation_gain"].fillna(0).round(0).astype(int)
+
+        # Filters Bar
+        min_d = act_df["date_dt"].min().date()
+        max_d = act_df["date_dt"].max().date()
+        available_types = ["All Types"] + sorted(list(act_df["type_clean"].dropna().unique()))
+
+        column_labels = {
+            "date": "Date",
+            "start_time": "Start Time",
+            "activity_name": "Activity Name",
+            "type_clean": "Activity Type",
+            "duration_str": "Duration",
+            "distance_km": "Distance (km)",
+            "avg_pace": "Avg Pace (/km)",
+            "avg_hr": "Avg HR (bpm)",
+            "max_hr": "Max HR (bpm)",
+            "aerobic_training_effect": "Aerobic TE",
+            "anaerobic_training_effect": "Anaerobic TE",
+            "calories_int": "Calories (kcal)",
+            "avg_speed_kmh": "Avg Speed (km/h)",
+            "max_speed_kmh": "Max Speed (km/h)",
+            "elevation_m": "Elevation (m)",
+            "steps": "Steps"
+        }
+
+        metric_presets = {
+            "Essential": ["date", "start_time", "activity_name", "type_clean", "duration_str", "distance_km", "avg_hr", "calories_int"],
+            "Cardio & Pace": ["date", "activity_name", "type_clean", "duration_str", "distance_km", "avg_pace", "avg_speed_kmh", "max_speed_kmh", "elevation_m"],
+            "Heart Rate & Load": ["date", "activity_name", "type_clean", "duration_str", "avg_hr", "max_hr", "aerobic_training_effect", "anaerobic_training_effect", "calories_int"],
+            "All Fields": list(column_labels.keys())
+        }
+
+        act_filter_box = st.container(border=True)
+        with act_filter_box:
+            c1, c2, c3 = st.columns([4, 3, 3])
+            with c1:
+                search_act = st.text_input(
+                    "Search workouts",
+                    placeholder="Search by name, type, date, or metric...",
+                    key="act_search_input"
+                )
+            with c2:
+                selected_act_range = st.date_input(
+                    "Date range",
+                    value=(min_d, max_d),
+                    min_value=min_d,
+                    max_value=max_d,
+                    key="act_date_range_picker"
+                )
+            with c3:
+                sel_type = st.selectbox("Activity Type", available_types, index=0, key="act_type_picker")
+
+            c4, c5, c6 = st.columns([3, 2, 5])
+            with c4:
+                sort_act = st.selectbox(
+                    "Sort by",
+                    ["Newest First", "Oldest First", "Longest Duration", "Greatest Distance", "Highest Calories", "Highest Max HR"],
+                    index=0,
+                    key="act_sort_picker"
+                )
+            with c5:
+                row_act_limit = st.selectbox("Rows shown", [25, 50, 100, 250, "All"], index=1, key="act_row_limit")
+            with c6:
+                preset_act_view = st.selectbox("Preset View", list(metric_presets.keys()), index=0, key="act_preset_view")
+
+        # Apply Filters
+        if isinstance(selected_act_range, tuple) and len(selected_act_range) == 2:
+            s_d, e_d = selected_act_range
+        else:
+            s_d, e_d = min_d, max_d
+
+        filtered_act = act_df[(act_df["date_dt"].dt.date >= s_d) & (act_df["date_dt"].dt.date <= e_d)].copy()
+
+        if sel_type != "All Types":
+            filtered_act = filtered_act[filtered_act["type_clean"] == sel_type]
+
+        if search_act.strip():
+            sq = search_act.strip().lower()
+            mask = filtered_act.astype(str).apply(lambda row: row.str.lower().str.contains(sq, na=False).any(), axis=1)
+            filtered_act = filtered_act[mask]
+
+        # Apply Sort
+        if sort_act == "Newest First":
+            filtered_act = filtered_act.sort_values("start_time", ascending=False)
+        elif sort_act == "Oldest First":
+            filtered_act = filtered_act.sort_values("start_time", ascending=True)
+        elif sort_act == "Longest Duration":
+            filtered_act = filtered_act.sort_values("duration_seconds", ascending=False)
+        elif sort_act == "Greatest Distance":
+            filtered_act = filtered_act.sort_values("distance_meters", ascending=False)
+        elif sort_act == "Highest Calories":
+            filtered_act = filtered_act.sort_values("calories", ascending=False)
+        elif sort_act == "Highest Max HR":
+            filtered_act = filtered_act.sort_values("max_hr", ascending=False)
+
+        total_act_count = len(act_df)
+        matched_act_count = len(filtered_act)
+
+        # KPI Summaries
+        total_km = filtered_act["distance_km"].sum()
+        total_cals = filtered_act["calories_int"].sum()
+        total_dur_hrs = (filtered_act["duration_seconds"].sum() / 3600.0) if not filtered_act.empty else 0
+        avg_act_hr = filtered_act["avg_hr"].mean() if not filtered_act.empty else None
+
+        st.markdown(f"""
+        <div class="data-card-row">
+            <div class="data-mini-card"><div class="data-mini-label">Sessions</div><div class="data-mini-value">{matched_act_count:,}</div><div class="data-mini-sub">of {total_act_count:,} total logged</div></div>
+            <div class="data-mini-card"><div class="data-mini-label">Total Distance</div><div class="data-mini-value">{total_km:.1f} km</div><div class="data-mini-sub">across filtered sessions</div></div>
+            <div class="data-mini-card"><div class="data-mini-label">Total Active Energy</div><div class="data-mini-value">{total_cals:,} kcal</div><div class="data-mini-sub">burned in workouts</div></div>
+            <div class="data-mini-card"><div class="data-mini-label">Total Active Time</div><div class="data-mini-value">{total_dur_hrs:.1f} hrs</div><div class="data-mini-sub">{f"Avg HR: {avg_act_hr:.0f} bpm" if pd.notna(avg_act_hr) else "Avg HR: —"}</div></div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Display & Export columns
+        selected_cols = metric_presets[preset_act_view]
+        export_act_df = filtered_act[selected_cols].copy()
+        
+        table_act_col, export_act_col = st.columns([7, 2])
+        with table_act_col:
+            st.markdown(f"<div style='font-size: 0.8125rem; color: var(--muted-foreground); margin-bottom: 8px;'>Showing {len(export_act_df):,} session{'s' if len(export_act_df) != 1 else ''}</div>", unsafe_allow_html=True)
+        with export_act_col:
+            st.download_button(
+                label="📥 Export Activities CSV",
+                data=export_act_df.to_csv(index=False).encode("utf-8"),
+                file_name=f"vidhealth_activities_{date.today().isoformat()}.csv",
+                mime="text/csv",
+                use_container_width=True,
+                key="download_activities_main_csv"
+            )
+
+        shown_act_df = export_act_df.copy()
+        if row_act_limit != "All":
+            shown_act_df = shown_act_df.head(int(row_act_limit))
+
+        display_act_table = shown_act_df.rename(columns={c: column_labels.get(c, c) for c in shown_act_df.columns})
+
+        st.dataframe(
+            display_act_table,
+            use_container_width=True,
+            hide_index=True,
+            height=480,
+            column_config={
+                "Date": st.column_config.TextColumn("Date", help="Workout date"),
+                "Start Time": st.column_config.TextColumn("Start Time", help="Exact start timestamp"),
+                "Activity Name": st.column_config.TextColumn("Activity Name", help="Name assigned in Garmin"),
+                "Activity Type": st.column_config.TextColumn("Activity Type", help="Sport / Workout category"),
+                "Duration": st.column_config.TextColumn("Duration", help="Total moving / elapsed time"),
+                "Distance (km)": st.column_config.NumberColumn("Distance (km)", format="%.2f km"),
+                "Avg Pace (/km)": st.column_config.TextColumn("Avg Pace (/km)", help="Average pace per kilometer"),
+                "Avg HR (bpm)": st.column_config.NumberColumn("Avg HR (bpm)", format="%d bpm"),
+                "Max HR (bpm)": st.column_config.NumberColumn("Max HR (bpm)", format="%d bpm"),
+                "Aerobic TE": st.column_config.NumberColumn("Aerobic TE", format="%.1f / 5.0", help="Garmin Aerobic Training Effect"),
+                "Anaerobic TE": st.column_config.NumberColumn("Anaerobic TE", format="%.1f / 5.0", help="Garmin Anaerobic Training Effect"),
+                "Calories (kcal)": st.column_config.NumberColumn("Calories (kcal)", format="%d kcal"),
+                "Avg Speed (km/h)": st.column_config.NumberColumn("Avg Speed (km/h)", format="%.1f km/h"),
+                "Max Speed (km/h)": st.column_config.NumberColumn("Max Speed (km/h)", format="%.1f km/h"),
+                "Elevation (m)": st.column_config.NumberColumn("Elevation (m)", format="%d m"),
+                "Steps": st.column_config.NumberColumn("Steps", format="%d")
+            }
+        )
+
+
+# ==================== TAB 5: BODY COMPOSITION ====================
 with tab_comp:
     st.markdown("<h3 style='font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 16px;'>Body Composition Tracking</h3>", unsafe_allow_html=True)
     
@@ -2261,6 +2476,7 @@ with tab_data:
             "Select Database Table / Dataset:",
             options=[
                 "📅 Daily Health Metrics (daily_metrics)",
+                "🏃 Garmin Activities & Workouts (garmin_activities)",
                 "🫁 Nocturnal SpO2 Drop Events (spo2_drop_events)",
                 "⏰ 24-Hour SpO2 Distribution Matrix (hourly_spo2)",
                 "📋 Activity & Habit Logs (activity_logs)",
@@ -2470,7 +2686,44 @@ with tab_data:
             )
 
     # ---------------------------------------------------------
-    # DATASET 2: NOCTURNAL SpO2 DROP EVENTS
+    # DATASET 2: GARMIN ACTIVITIES & WORKOUTS
+    # ---------------------------------------------------------
+    elif dataset_choice == "🏃 Garmin Activities & Workouts (garmin_activities)":
+        act_feed_df = db.get_activities_df(days=None)
+        if act_feed_df.empty:
+            st.info("No recorded Garmin activities in database. Click 'Sync Garmin' or run `python sync.py backfill 30`.")
+        else:
+            st.download_button(
+                label="📥 Export Activities CSV",
+                data=act_feed_df.to_csv(index=False).encode("utf-8"),
+                file_name=f"vidhealth_activities_{date.today().isoformat()}.csv",
+                mime="text/csv",
+                key="download_act_dataset_csv"
+            )
+            
+            clean_act = act_feed_df.copy()
+            clean_act["distance_km"] = (clean_act["distance_meters"].fillna(0) / 1000.0).round(2)
+            clean_act["duration_mins"] = (clean_act["duration_seconds"].fillna(0) / 60.0).round(1)
+            clean_act["type"] = clean_act["activity_type"].fillna("unknown").str.replace("_", " ").str.title()
+            
+            st.dataframe(
+                clean_act[[
+                    "activity_id", "date", "start_time", "activity_name", "type",
+                    "duration_mins", "distance_km", "calories", "avg_hr", "max_hr",
+                    "aerobic_training_effect", "anaerobic_training_effect"
+                ]].rename(columns={
+                    "activity_id": "Activity ID", "date": "Date", "start_time": "Start Time",
+                    "activity_name": "Workout Name", "type": "Type", "duration_mins": "Duration (mins)",
+                    "distance_km": "Distance (km)", "calories": "Calories (kcal)", "avg_hr": "Avg HR",
+                    "max_hr": "Max HR", "aerobic_training_effect": "Aerobic TE", "anaerobic_training_effect": "Anaerobic TE"
+                }),
+                use_container_width=True,
+                hide_index=True,
+                height=520
+            )
+
+    # ---------------------------------------------------------
+    # DATASET 3: NOCTURNAL SpO2 DROP EVENTS
     # ---------------------------------------------------------
     elif dataset_choice == "🫁 Nocturnal SpO2 Drop Events (spo2_drop_events)":
         events_df = db.get_all_spo2_events_df(days=None)

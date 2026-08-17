@@ -111,6 +111,18 @@ def sync_date(api, target_date: str) -> dict:
             result["respiration"] = respiration
     except Exception as e:
         result["respiration_error"] = str(e)
+
+    try:
+        activities = api.get_activities_by_date(target_date, target_date)
+        if activities:
+            result["activities"] = activities
+    except Exception as e:
+        try:
+            act_fordate = api.get_activities_fordate(target_date)
+            if act_fordate:
+                result["activities"] = act_fordate
+        except Exception as e2:
+            result["activities_error"] = str(e)
     
     return result
 
@@ -182,6 +194,12 @@ def smart_sync(days: int = 3) -> dict:
         db.backfill_spo2_epochs_if_needed()
     except Exception as ep_err:
         print(f"[WARN] SpO2 backfill check: {ep_err}")
+
+    # Ensure Garmin recorded activities & workouts are processed
+    try:
+        db.backfill_activities_if_needed()
+    except Exception as act_err:
+        print(f"[WARN] Activities backfill check: {act_err}")
 
     summary = {
         "status": "success" if synced_dates else "partial",
@@ -298,6 +316,12 @@ def backfill(days: int = 30, force: bool = False) -> dict:
         db.backfill_spo2_epochs_if_needed()
     except Exception as ep_err:
         print(f"[WARN] SpO2 backfill error: {ep_err}")
+
+    # Run Garmin activities backfill pass across all historical raw JSONs
+    try:
+        db.backfill_activities_if_needed()
+    except Exception as act_err:
+        print(f"[WARN] Activities backfill error: {act_err}")
 
     summary = {
         "days_synced": len(synced_dates),

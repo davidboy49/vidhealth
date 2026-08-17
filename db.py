@@ -125,6 +125,28 @@ def init_db():
         UNIQUE(date, hour)
     )
     """)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS garmin_activities (
+        activity_id INTEGER PRIMARY KEY,
+        date TEXT NOT NULL,
+        start_time TEXT NOT NULL,
+        activity_name TEXT,
+        activity_type TEXT,
+        duration_seconds REAL,
+        elapsed_duration_seconds REAL,
+        distance_meters REAL,
+        calories REAL,
+        avg_hr REAL,
+        max_hr REAL,
+        aerobic_training_effect REAL,
+        anaerobic_training_effect REAL,
+        avg_speed REAL,
+        max_speed REAL,
+        elevation_gain REAL,
+        steps INTEGER,
+        raw_json TEXT
+    )
+    """)
     conn.commit()
     conn.close()
 
@@ -274,6 +296,12 @@ def save_day(date_str: str, raw_data: dict):
         process_and_save_spo2(date_str, raw_data)
     except Exception as e:
         print(f"[WARN] Failed to process SpO2 epochs for {date_str}: {e}")
+
+    # Process and persist Garmin activities & workouts
+    try:
+        process_and_save_activities(date_str, raw_data)
+    except Exception as e:
+        print(f"[WARN] Failed to process activities for {date_str}: {e}")
 
 def get_df(limit: int | None = 30):
     """
@@ -827,6 +855,146 @@ def get_all_spo2_events_df(days: int = None):
     return df
 
 
+def process_and_save_activities(date_str: str, raw_data: dict):
+    """
+    Parses and persists Garmin workout/activity sessions into garmin_activities table.
+    Also auto-populates daily_metrics.workout_type with summarized session descriptions.
+    """
+    init_db()
+    activities_raw = raw_data.get("activities", [])
+    if not activities_raw:
+        return
+
+    # Normalize into a list
+    activity_list = []
+    if isinstance(activities_raw, list):
+        activity_list = activities_raw
+    elif isinstance(activities_raw, dict):
+        activity_list = (
+            activities_raw.get("activities")
+            or activities_raw.get("Activities")
+            or activities_raw.get("activityList")
+            or [activities_raw]
+        )
+
+    if not isinstance(activity_list, list) or not activity_list:
+        return
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    summary_labels = []
+
+    for item in activity_list:
+        if not isinstance(item, dict):
+            continue
+
+        act_id = item.get("activityId")
+        if not act_id:
+            continue
+
+        start_time = item.get("startTimeLocal") or item.get("startTimeGMT") or f"{date_str} 00:00:00"
+        act_date = start_time[:10] if len(start_time) >= 10 else date_str
+        
+        act_type_obj = item.get("activityType", {})
+        act_type = act_type_obj.get("typeKey") if isinstance(act_type_obj, dict) else str(act_type_obj or "unknown")
+        act_name = item.get("activityName") or act_type.replace("_", " ").title()
+
+        duration = item.get("duration") or item.get("elapsedDuration") or 0.0
+        elapsed_duration = item.get("elapsedDuration") or duration
+        distance = item.get("distance") or 0.0
+        calories = item.get("calories") or item.get("activeKilocalories") or 0.0
+        avg_hr = item.get("averageHR") or item.get("averageHeartRate")
+        max_hr = item.get("maxHR") or item.get("maxHeartRate")
+        aerobic_te = item.get("aerobicTrainingEffect")
+        anaerobic_te = item.get("anaerobicTrainingEffect")
+        avg_speed = item.get("averageSpeed") or 0.0
+        max_speed = item.get("maxSpeed") or 0.0
+        elevation_gain = item.get("elevationGain") or 0.0
+        steps = item.get("steps")
+        raw_json_str = json.dumps(item, default=str)
+
+        cursor.execute("""
+        INSERT INTO garmin_activities (
+            activity_id, date, start_time, activity_name, activity_type,
+            duration_seconds, elapsed_duration_seconds, distance_meters,
+            calories, avg_hr, max_hr, aerobic_training_effect,
+            anaerobic_training_effect, avg_speed, max_speed, elevation_gain,
+            steps, raw_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(activity_id) DO UPDATE SET
+            date = excluded.date,
+            start_time = excluded.start_time,
+            activity_name = excluded.activity_name,
+            activity_type = excluded.activity_type,
+            duration_seconds = excluded.duration_seconds,
+            elapsed_duration_seconds = excluded.elapsed_duration_seconds,
+            distance_meters = excluded.distance_meters,
+            calories = excluded.calories,
+            avg_hr = excluded.avg_hr,
+            max_hr = excluded.max_hr,
+            aerobic_training_effect = excluded.aerobic_training_effect,
+            anaerobic_training_effect = excluded.anaerobic_training_effect,
+            avg_speed = excluded.avg_speed,
+            max_speed = excluded.max_speed,
+            elevation_gain = excluded.elevation_gain,
+            steps = excluded.steps,
+            raw_json = excluded.raw_json
+        """, (
+            act_id, act_date, start_time, act_name, act_type,
+            duration, elapsed_duration, distance,
+            calories, avg_hr, max_hr, aerobic_te,
+            anaerobic_te, avg_speed, max_speed, elevation_gain,
+            steps, raw_json_str
+        ))
+
+        # Format label for daily_metrics summary
+        mins = int(round(duration / 60.0))
+        dist_km = (distance / 1000.0) if distance and distance > 0 else 0
+        type_clean = act_type.replace("_", " ").title()
+        if dist_km > 0.1:
+            summary_labels.append(f"{type_clean} ({dist_km:.1f} km, {mins}m)")
+        else:
+            summary_labels.append(f"{type_clean} ({mins}m)")
+
+    # Update daily_metrics.workout_type if available
+    if summary_labels:
+        full_workout_summary = ", ".join(summary_labels)
+        cursor.execute("""
+            UPDATE daily_metrics
+            SET workout_type = ?
+            WHERE date = ? AND (workout_type IS NULL OR workout_type = '' OR workout_type LIKE '%Auto%')
+        """, (full_workout_summary, date_str))
+
+    conn.commit()
+    conn.close()
+
+
+def get_activities_df(days: int = None, limit: int = None):
+    """
+    Returns DataFrame of recorded Garmin activities across past N days (or all if None).
+    """
+    import pandas as pd
+    init_db()
+    conn = get_connection()
+    query = "SELECT * FROM garmin_activities"
+    params = []
+
+    if days and days > 0:
+        query += " WHERE date >= date('now', '-' || ? || ' days')"
+        params.append(days)
+
+    query += " ORDER BY start_time DESC"
+
+    if limit and limit > 0:
+        query += " LIMIT ?"
+        params.append(limit)
+
+    df = pd.read_sql_query(query, conn, params=params)
+    conn.close()
+    return df
+
+
 def backfill_spo2_epochs_if_needed():
     """
     Ensures all existing records in daily_metrics have exact-moment SpO2 epochs & events parsed.
@@ -851,8 +1019,30 @@ def backfill_spo2_epochs_if_needed():
             process_and_save_spo2(date_str, raw_data)
 
 
+def backfill_activities_if_needed():
+    """
+    Scans raw JSON archives in data/ and processes any recorded activities into garmin_activities table.
+    """
+    init_db()
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT date, raw_json FROM daily_metrics ORDER BY date ASC")
+    rows = cursor.fetchall()
+    conn.close()
+
+    for date_str, raw_json_str in rows:
+        if raw_json_str:
+            try:
+                raw_data = json.loads(raw_json_str)
+                if raw_data.get("activities"):
+                    process_and_save_activities(date_str, raw_data)
+            except Exception:
+                pass
+
+
 if __name__ == "__main__":
     init_db()
     backfill_spo2_epochs_if_needed()
-    print("Database initialized and SpO2 backfilled at:", DB_PATH)
+    backfill_activities_if_needed()
+    print("Database initialized, SpO2 & activities backfilled at:", DB_PATH)
 
