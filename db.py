@@ -783,34 +783,46 @@ def get_hourly_spo2_df(date_str: str):
     return df
 
 
-def get_multi_day_hourly_spo2_df(days: int = 30):
+def get_multi_day_hourly_spo2_df(days: int = None):
     """
-    Returns multi-day hourly SpO2 DataFrame for heatmap visualization across past N days.
+    Returns multi-day hourly SpO2 DataFrame for heatmap visualization across past N days (or all if None).
     """
     import pandas as pd
     init_db()
     conn = get_connection()
-    df = pd.read_sql_query("""
-        SELECT * FROM hourly_spo2 
-        WHERE date >= date('now', '-' || ? || ' days')
-        ORDER BY date ASC, hour ASC
-    """, conn, params=(days,))
+    if days and days > 0:
+        df = pd.read_sql_query("""
+            SELECT * FROM hourly_spo2 
+            WHERE date >= date('now', '-' || ? || ' days')
+            ORDER BY date ASC, hour ASC
+        """, conn, params=(days,))
+    else:
+        df = pd.read_sql_query("""
+            SELECT * FROM hourly_spo2 
+            ORDER BY date ASC, hour ASC
+        """, conn)
     conn.close()
     return df
 
 
-def get_all_spo2_events_df(days: int = 30):
+def get_all_spo2_events_df(days: int = None):
     """
-    Returns DataFrame of all exact-moment desaturation events across past N days.
+    Returns DataFrame of all exact-moment desaturation events across past N days (or all if None).
     """
     import pandas as pd
     init_db()
     conn = get_connection()
-    df = pd.read_sql_query("""
-        SELECT * FROM spo2_drop_events 
-        WHERE date >= date('now', '-' || ? || ' days')
-        ORDER BY date DESC, start_time DESC
-    """, conn, params=(days,))
+    if days and days > 0:
+        df = pd.read_sql_query("""
+            SELECT * FROM spo2_drop_events 
+            WHERE date >= date('now', '-' || ? || ' days')
+            ORDER BY date DESC, start_time DESC
+        """, conn, params=(days,))
+    else:
+        df = pd.read_sql_query("""
+            SELECT * FROM spo2_drop_events 
+            ORDER BY date DESC, start_time DESC
+        """, conn)
     conn.close()
     return df
 
