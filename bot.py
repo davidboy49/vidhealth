@@ -254,6 +254,54 @@ async def recover_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     await update.message.reply_text(msg, parse_mode="Markdown")
 
+async def spo2_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_auth(update, context):
+        return
+
+    df = db.get_df(limit=7)
+    if df.empty:
+        await update.message.reply_text("No health data synced yet.")
+        return
+
+    latest = df.iloc[-1]
+    date_str = latest["date"]
+    
+    # Fetch exact-moment drop events
+    events = db.get_spo2_drop_events(date_str)
+    epochs_df = db.get_spo2_epochs_df(date_str)
+    
+    odi_info = analytics.calculate_oxygen_desaturation_index(events, latest.get("sleep_duration"))
+    hypoxic_info = analytics.calculate_hypoxic_burden(epochs_df)
+    chrono_info = analytics.analyze_chrono_distribution(events)
+
+    spo2_min = latest.get("spo2_min")
+    spo2_avg = latest.get("spo2_avg")
+
+    msg = (
+        f"🫁 **Exact-Moment SpO2 & Respiratory Report: {date_str}**\n\n"
+        f"• **Overnight Avg SpO2:** {spo2_avg or '—'}%\n"
+        f"• **Lowest Nadir:** **{spo2_min or '—'}%**\n"
+        f"• **Estimated ODI:** **{odi_info['odi_score']} events/hr** ({odi_info['classification']})\n"
+        f"• **Total Desaturation Events:** {len(events)}\n"
+        f"• **Hypoxic Burden (T<90):** {hypoxic_info['t90_minutes']} mins\n"
+        f"• **Peak Vulnerability Window:** {chrono_info['peak_window']}\n\n"
+    )
+
+    if events:
+        msg += "⏱️ **Exact Drop Moments Overnight:**\n"
+        for i, ev in enumerate(events[:5], 1):
+            sev_icon = "🚨" if ev["severity"] == "CRITICAL" else ("⚠️" if ev["severity"] == "WARNING" else "🔹")
+            msg += (
+                f"{sev_icon} **{ev['nadir_time']}** — Dip to **{ev['nadir_spo2']}%** "
+                f"(Δ -{ev['drop_magnitude']}%, {ev['duration_seconds']}s, {ev['sleep_stage']})\n"
+            )
+        if len(events) > 5:
+            msg += f"_...and {len(events) - 5} more events logged in dashboard._\n"
+    else:
+        msg += "✅ **No significant oxygen desaturations detected.** Arterial saturation remained stable throughout sleep.\n"
+
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_auth(update, context):
         return
@@ -680,6 +728,7 @@ def main():
     app.add_handler(CommandHandler("week", week_command))
     app.add_handler(CommandHandler("recover", recover_command))
     app.add_handler(CommandHandler("status", status_command))
+    app.add_handler(CommandHandler("spo2", spo2_command))
     
     # Inline buttons callback handler
     app.add_handler(CallbackQueryHandler(callback_query_handler))

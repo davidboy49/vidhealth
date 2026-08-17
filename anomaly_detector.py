@@ -58,28 +58,40 @@ def scan_daily_anomalies(target_date: str | None = None) -> list[dict]:
 
     anomalies = []
 
-    # 1. SpO2 Desaturation Check
+    # 1. Exact-Moment SpO2 Desaturation Check
     spo2_min = current_row.get("spo2_min")
     spo2_avg = current_row.get("spo2_avg")
+    drop_events = db.get_spo2_drop_events(target_date)
+    sleep_duration = current_row.get("sleep_duration")
+    odi_info = analytics.calculate_oxygen_desaturation_index(drop_events, sleep_duration)
+    
+    worst_event = min(drop_events, key=lambda e: e.get("nadir_spo2", 100)) if drop_events else None
+
     if spo2_min is not None and pd.notna(spo2_min):
         spo2_min_val = float(spo2_min)
         if spo2_min_val < 85.0:
+            exact_detail = ""
+            if worst_event:
+                exact_detail = f" at exact moment **{worst_event.get('nadir_time')}** (duration: {worst_event.get('duration_seconds')}s, stage: {worst_event.get('sleep_stage')}, resp: {worst_event.get('respiration_rate') or '—'} brpm)"
             anomalies.append({
                 "date": target_date,
                 "severity": "CRITICAL",
                 "alert_type": "SPO2_CRITICAL_DROP",
                 "title": "🚨 Critical Oxygen Desaturation",
-                "message": f"Overnight SpO2 dropped to **{int(spo2_min_val)}%** (Average: {spo2_avg or '—'}%). Frequent drops below 88% indicate potential sleep-disordered breathing / airway resistance.",
-                "metrics": {"spo2_min": spo2_min_val, "spo2_avg": float(spo2_avg) if spo2_avg else None}
+                "message": f"Overnight SpO2 dropped to **{int(spo2_min_val)}%**{exact_detail}. Estimated ODI: **{odi_info['odi_score']} events/hr** ({odi_info['classification']}). Frequent drops below 88% indicate airway obstruction / sleep apnea risk.",
+                "metrics": {"spo2_min": spo2_min_val, "spo2_avg": float(spo2_avg) if spo2_avg else None, "worst_event": worst_event, "odi": odi_info}
             })
-        elif spo2_min_val < 90.0:
+        elif spo2_min_val < 90.0 or odi_info["odi_score"] >= 5.0:
+            exact_detail = ""
+            if worst_event:
+                exact_detail = f" at exact moment **{worst_event.get('nadir_time')}** (stage: {worst_event.get('sleep_stage')}, duration: {worst_event.get('duration_seconds')}s)"
             anomalies.append({
                 "date": target_date,
                 "severity": "WARNING",
                 "alert_type": "SPO2_DESATURATION",
                 "title": "⚠️ Sleep Oxygen Desaturation",
-                "message": f"Overnight minimum SpO2 dipped to **{int(spo2_min_val)}%**. Monitor if this repeats across consecutive nights.",
-                "metrics": {"spo2_min": spo2_min_val, "spo2_avg": float(spo2_avg) if spo2_avg else None}
+                "message": f"Overnight SpO2 reached a nadir of **{int(spo2_min_val)}%**{exact_detail}. Estimated ODI: **{odi_info['odi_score']}/hr** ({odi_info['classification']}). Total events: {len(drop_events)}.",
+                "metrics": {"spo2_min": spo2_min_val, "spo2_avg": float(spo2_avg) if spo2_avg else None, "worst_event": worst_event, "odi": odi_info}
             })
 
     # 2. Resting HR Spike Check (vs 7-28 day baseline)

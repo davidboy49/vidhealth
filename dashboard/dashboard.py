@@ -409,9 +409,10 @@ def clean_text(value):
     text = str(value).strip()
     return "" if text.lower() in {"nan", "none", "nat", "<na>"} else text
 # ---------- TABS (EMOJI-LESS PLAIN TEXT HEADERS) ----------
-tab_today, tab_trends, tab_comp, tab_ai, tab_recovery, tab_data = st.tabs([
+tab_today, tab_trends, tab_spo2, tab_comp, tab_ai, tab_recovery, tab_data = st.tabs([
     "Today", 
     "Trends", 
+    "Oxygen & Respiration",
     "Body Comp",
     "AI Insights", 
     "Recovery Forecast",
@@ -1336,7 +1337,406 @@ with tab_trends:
     else:
         st.info("Accumulating data. Wear watch consistently to show trend charts.")
 
-# ==================== TAB 3: BODY COMPOSITION ====================
+# ==================== TAB: OXYGEN & RESPIRATION (EXACT MOMENTS & CHRONO-PROFILE) ====================
+with tab_spo2:
+    st.markdown("""
+    <div style="margin-bottom: 20px;">
+        <h3 style="font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 4px; color: var(--foreground);">
+            Oxygen & Respiratory Dynamics
+        </h3>
+        <div style="font-size: 0.85rem; color: var(--muted-foreground);">
+            Exact-moment arterial desaturation tracking, Oxygen Desaturation Index (ODI), nocturnal hypoxic burden, and 24-hour chrono-distribution.
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Date Selector for Historical Inspection
+    df_all_dates = db.get_df(limit=60)
+    if not df_all_dates.empty:
+        available_dates = df_all_dates["date"].tolist()[::-1] # Newest first
+    else:
+        available_dates = [datetime.today().strftime("%Y-%m-%d")]
+
+    col_selector, col_empty = st.columns([3, 7])
+    with col_selector:
+        selected_spo2_date = st.selectbox(
+            "Select Night / Date to Inspect:",
+            options=available_dates,
+            index=0,
+            key="spo2_date_selector"
+        )
+
+    # Load high-resolution data for selected date
+    epochs_df = db.get_spo2_epochs_df(selected_spo2_date)
+    drop_events = db.get_spo2_drop_events(selected_spo2_date)
+    hourly_df = db.get_hourly_spo2_df(selected_spo2_date)
+    multi_day_hourly = db.get_multi_day_hourly_spo2_df(days=30)
+    all_events_df = db.get_all_spo2_events_df(days=30)
+
+    # Retrieve matching daily summary row
+    matching_row = df_all_dates[df_all_dates["date"] == selected_spo2_date]
+    if not matching_row.empty:
+        day_metrics = matching_row.iloc[0]
+        sleep_dur = day_metrics.get("sleep_duration")
+        spo2_avg_val = day_metrics.get("spo2_avg")
+        spo2_min_val = day_metrics.get("spo2_min")
+        resp_avg_val = day_metrics.get("respiration_avg")
+    else:
+        day_metrics = {}
+        sleep_dur = 7.5 * 3600
+        spo2_avg_val = None
+        spo2_min_val = None
+        resp_avg_val = None
+
+    # Compute Clinical Analytics
+    odi_info = analytics.calculate_oxygen_desaturation_index(drop_events, sleep_dur)
+    hypoxic_info = analytics.calculate_hypoxic_burden(epochs_df)
+    chrono_info = analytics.analyze_chrono_distribution(drop_events)
+
+    worst_event = min(drop_events, key=lambda e: e.get("nadir_spo2", 100)) if drop_events else None
+
+    # Top KPI Metrics Grid (UI/UX Pro Max Shadcn Cards)
+    kpi_col1, kpi_col2, kpi_col3, kpi_col4 = st.columns(4)
+
+    with kpi_col1:
+        nadir_display = f"{worst_event['nadir_spo2']}%" if worst_event else (f"{int(spo2_min_val)}%" if spo2_min_val else "—")
+        nadir_time_display = f"{worst_event['nadir_time']}" if worst_event else "No drops"
+        nadir_color = "#ef4444" if (worst_event and worst_event['nadir_spo2'] < 85) else ("#f59e0b" if (worst_event and worst_event['nadir_spo2'] < 90) else "#10b981")
+        st.markdown(f"""
+        <div class="shadcn-card" style="padding: 16px; border-left: 4px solid {nadir_color};">
+            <div style="font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted-foreground);">
+                Lowest SpO2 Nadir
+            </div>
+            <div style="font-size: 1.75rem; font-weight: 700; color: var(--foreground); margin-top: 4px; display: flex; align-items: baseline; gap: 8px;">
+                {nadir_display}
+                <span style="font-size: 0.75rem; font-weight: 600; padding: 2px 6px; border-radius: 9999px; background-color: {nadir_color}20; color: {nadir_color};">
+                    {nadir_time_display}
+                </span>
+            </div>
+            <div style="font-size: 0.8rem; color: var(--muted-foreground); margin-top: 4px;">
+                Average: {spo2_avg_val or hypoxic_info.get('mean_spo2') or '—'}% · Normal is &ge;95%
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with kpi_col2:
+        crit_count = sum(1 for e in drop_events if e.get("severity") == "CRITICAL")
+        warn_count = sum(1 for e in drop_events if e.get("severity") == "WARNING")
+        mild_count = sum(1 for e in drop_events if e.get("severity") == "MILD")
+        event_badge_color = "#ef4444" if crit_count > 0 else ("#f59e0b" if warn_count > 0 else "#10b981")
+        st.markdown(f"""
+        <div class="shadcn-card" style="padding: 16px; border-left: 4px solid {event_badge_color};">
+            <div style="font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted-foreground);">
+                Exact Drop Events
+            </div>
+            <div style="font-size: 1.75rem; font-weight: 700; color: var(--foreground); margin-top: 4px;">
+                {len(drop_events)} <span style="font-size: 0.875rem; font-weight: 500; color: var(--muted-foreground);">discrete drops</span>
+            </div>
+            <div style="font-size: 0.8rem; color: var(--muted-foreground); margin-top: 4px;">
+                <span style="color: #ef4444; font-weight: 600;">{crit_count} Critical</span> &bull; 
+                <span style="color: #f59e0b; font-weight: 600;">{warn_count} Warning</span> &bull; 
+                <span style="color: #10b981; font-weight: 600;">{mild_count} Mild</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with kpi_col3:
+        st.markdown(f"""
+        <div class="shadcn-card" style="padding: 16px; border-left: 4px solid {odi_info['status_color']};">
+            <div style="font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted-foreground);">
+                Estimated ODI Index
+            </div>
+            <div style="font-size: 1.75rem; font-weight: 700; color: var(--foreground); margin-top: 4px; display: flex; align-items: baseline; gap: 8px;">
+                {odi_info['odi_score']} <span style="font-size: 0.875rem; font-weight: 500; color: var(--muted-foreground);">/ hour</span>
+                <span style="font-size: 0.75rem; font-weight: 600; padding: 2px 6px; border-radius: 9999px; background-color: {odi_info['status_color']}20; color: {odi_info['status_color']};">
+                    {odi_info['classification']}
+                </span>
+            </div>
+            <div style="font-size: 0.8rem; color: var(--muted-foreground); margin-top: 4px;">
+                AASM criteria: &lt;5 Normal, 5-15 Mild, &gt;15 Moderate
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with kpi_col4:
+        t90_val = hypoxic_info.get("t90_minutes", 0.0)
+        t90_color = "#ef4444" if t90_val >= 10 else ("#f59e0b" if t90_val > 2 else "#10b981")
+        st.markdown(f"""
+        <div class="shadcn-card" style="padding: 16px; border-left: 4px solid {t90_color};">
+            <div style="font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted-foreground);">
+                Hypoxic Burden (T&lt;90)
+            </div>
+            <div style="font-size: 1.75rem; font-weight: 700; color: var(--foreground); margin-top: 4px;">
+                {t90_val} <span style="font-size: 0.875rem; font-weight: 500; color: var(--muted-foreground);">minutes</span>
+            </div>
+            <div style="font-size: 0.8rem; color: var(--muted-foreground); margin-top: 4px;">
+                {hypoxic_info.get('hypoxic_fraction_pct', 0.0)}% of sleep time spent below 90% SpO2
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown("<div style='height: 24px;'></div>", unsafe_allow_html=True)
+
+    # ==================== HIGH RESOLUTION CONTINUOUS SpO2 TIMELINE WITH EXACT EVENT PINS ====================
+    st.markdown("<h4 style='font-size: 1.05rem; font-weight: 600; color: var(--foreground); margin-bottom: 8px;'>High-Resolution Nocturnal Trace & Exact Desaturation Moments</h4>", unsafe_allow_html=True)
+
+    if not epochs_df.empty:
+        # Create dual-panel timeline chart
+        from plotly.subplots import make_subplots
+        fig_timeline = make_subplots(
+            rows=2, cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.08,
+            row_heights=[0.7, 0.3],
+            subplot_titles=("Continuous SpO2 (%) with Exact Drop Event Pins", "Respiration Rate (brpm) & Sleep Stage")
+        )
+
+        # Background Safety Zones on Row 1
+        fig_timeline.add_hrect(y0=95, y1=100, fillcolor="rgba(16,185,129,0.08)", line_width=0, row=1, col=1)
+        fig_timeline.add_hrect(y0=90, y1=95, fillcolor="rgba(245,158,11,0.08)", line_width=0, row=1, col=1)
+        fig_timeline.add_hrect(y0=70, y1=90, fillcolor="rgba(239,68,68,0.12)", line_width=0, row=1, col=1)
+
+        # Continuous SpO2 Line Trace
+        fig_timeline.add_trace(
+            go.Scatter(
+                x=epochs_df["time_str"],
+                y=epochs_df["spo2_value"],
+                mode="lines",
+                name="Continuous SpO2",
+                line=dict(color="#06b6d4", width=2.2),
+                hovertemplate="<b>Time:</b> %{x}<br><b>SpO2:</b> %{y}%<extra></extra>"
+            ),
+            row=1, col=1
+        )
+
+        # Exact Drop Pins
+        if drop_events:
+            pin_x = [e["nadir_time"] for e in drop_events]
+            pin_y = [e["nadir_spo2"] for e in drop_events]
+            pin_colors = ["#ef4444" if e["severity"] == "CRITICAL" else ("#f59e0b" if e["severity"] == "WARNING" else "#3b82f6") for e in drop_events]
+            pin_customdata = [[e["drop_magnitude"], e["duration_seconds"], e["sleep_stage"], e.get("respiration_rate") or "—", e["severity"]] for e in drop_events]
+
+            fig_timeline.add_trace(
+                go.Scatter(
+                    x=pin_x,
+                    y=pin_y,
+                    mode="markers+text",
+                    name="Exact Drop Moments",
+                    marker=dict(
+                        symbol="diamond",
+                        size=12,
+                        color=pin_colors,
+                        line=dict(color="#ffffff", width=2)
+                    ),
+                    text=[f"{y}%" for y in pin_y],
+                    textposition="bottom center",
+                    textfont=dict(size=10, color="#ef4444"),
+                    customdata=pin_customdata,
+                    hovertemplate=(
+                        "🚨 <b>EXACT DROP EVENT</b><br>"
+                        "<b>Exact Moment:</b> %{x}<br>"
+                        "<b>Nadir SpO2:</b> %{y}%<br>"
+                        "<b>Drop Depth:</b> -%{customdata[0]}% from baseline<br>"
+                        "<b>Duration:</b> %{customdata[1]} seconds<br>"
+                        "<b>Sleep Stage:</b> %{customdata[2]}<br>"
+                        "<b>Respiration:</b> %{customdata[3]} brpm<br>"
+                        "<b>Severity:</b> %{customdata[4]}<extra></extra>"
+                    )
+                ),
+                row=1, col=1
+            )
+
+        # Respiration Curve on Row 2
+        if "respiration_rate" in epochs_df.columns and epochs_df["respiration_rate"].notna().any():
+            fig_timeline.add_trace(
+                go.Scatter(
+                    x=epochs_df["time_str"],
+                    y=epochs_df["respiration_rate"],
+                    mode="lines",
+                    name="Respiration (brpm)",
+                    line=dict(color="#38bdf8", width=1.8),
+                    hovertemplate="<b>Time:</b> %{x}<br><b>Respiration:</b> %{y:.1f} brpm<extra></extra>"
+                ),
+                row=2, col=1
+            )
+
+        fig_timeline.update_layout(
+            template=plotly_template,
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            height=460,
+            margin=dict(l=10, r=10, t=40, b=10),
+            showlegend=True,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
+        fig_timeline.update_yaxes(title_text="SpO2 (%)", range=[70, 100], gridcolor=grid_color, row=1, col=1)
+        fig_timeline.update_yaxes(title_text="brpm", range=[6, 22], gridcolor=grid_color, row=2, col=1)
+        fig_timeline.update_xaxes(gridcolor=grid_color)
+
+        st.plotly_chart(fig_timeline, use_container_width=True)
+    else:
+        st.info("No high-resolution SpO2 epoch recordings found for this date.")
+
+    st.markdown("<div style='height: 24px;'></div>", unsafe_allow_html=True)
+
+    # ==================== EXACT DESATURATION EVENT LOG TABLE ====================
+    st.markdown("<h4 style='font-size: 1.05rem; font-weight: 600; color: var(--foreground); margin-bottom: 8px;'>Exact Nocturnal Desaturation Events Log</h4>", unsafe_allow_html=True)
+
+    if drop_events:
+        table_rows = []
+        for i, ev in enumerate(drop_events, 1):
+            sev_badge = (
+                "<span style='background:#ef444420; color:#ef4444; font-weight:600; padding:2px 8px; border-radius:9999px;'>🚨 Critical</span>"
+                if ev["severity"] == "CRITICAL" else
+                ("<span style='background:#f59e0b20; color:#f59e0b; font-weight:600; padding:2px 8px; border-radius:9999px;'>⚠️ Warning</span>"
+                 if ev["severity"] == "WARNING" else
+                 "<span style='background:#3b82f620; color:#3b82f6; font-weight:600; padding:2px 8px; border-radius:9999px;'>🔹 Mild</span>")
+            )
+            table_rows.append({
+                "Event #": f"#{i}",
+                "Onset Time": ev.get("start_time", "—"),
+                "Exact Nadir Moment": f"<b>{ev.get('nadir_time', '—')}</b>",
+                "Recovery Time": ev.get("end_time", "—"),
+                "Nadir SpO2": f"<b style='color:#ef4444;'>{ev.get('nadir_spo2')}%</b>",
+                "Drop Magnitude": f"-{ev.get('drop_magnitude')} %",
+                "Duration": f"{ev.get('duration_seconds')}s",
+                "Sleep Stage": ev.get("sleep_stage", "Sleep"),
+                "Respiration": f"{ev.get('respiration_rate') or '—'} brpm",
+                "Clinical Severity": sev_badge
+            })
+
+        table_df = pd.DataFrame(table_rows)
+        st.markdown(
+            f"""
+            <div class="shadcn-card" style="padding: 12px; overflow-x: auto;">
+                <table style="width: 100%; border-collapse: collapse; font-size: 0.85rem; text-align: left;">
+                    <thead>
+                        <tr style="border-bottom: 1px solid var(--border); color: var(--muted-foreground);">
+                            <th style="padding: 8px 12px;">Event</th>
+                            <th style="padding: 8px 12px;">Onset</th>
+                            <th style="padding: 8px 12px;">Exact Nadir Moment</th>
+                            <th style="padding: 8px 12px;">Recovery</th>
+                            <th style="padding: 8px 12px;">Nadir SpO2</th>
+                            <th style="padding: 8px 12px;">Drop Depth</th>
+                            <th style="padding: 8px 12px;">Duration</th>
+                            <th style="padding: 8px 12px;">Sleep Stage</th>
+                            <th style="padding: 8px 12px;">Respiration</th>
+                            <th style="padding: 8px 12px;">Severity</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {''.join([
+                            f"<tr style='border-bottom: 1px solid var(--border); color: var(--foreground);'>" +
+                            f"<td style='padding: 8px 12px;'>{r['Event #']}</td>" +
+                            f"<td style='padding: 8px 12px;'>{r['Onset Time']}</td>" +
+                            f"<td style='padding: 8px 12px;'>{r['Exact Nadir Moment']}</td>" +
+                            f"<td style='padding: 8px 12px;'>{r['Recovery Time']}</td>" +
+                            f"<td style='padding: 8px 12px;'>{r['Nadir SpO2']}</td>" +
+                            f"<td style='padding: 8px 12px;'>{r['Drop Magnitude']}</td>" +
+                            f"<td style='padding: 8px 12px;'>{r['Duration']}</td>" +
+                            f"<td style='padding: 8px 12px;'>{r['Sleep Stage']}</td>" +
+                            f"<td style='padding: 8px 12px;'>{r['Respiration']}</td>" +
+                            f"<td style='padding: 8px 12px;'>{r['Clinical Severity']}</td>" +
+                            "</tr>"
+                            for _, r in table_df.iterrows()
+                        ])}
+                    </tbody>
+                </table>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+    else:
+        st.success("✅ No nocturnal oxygen desaturation incidents registered for this night. Blood oxygenation remained stable.")
+
+    st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+
+    # ==================== HOURLY MACRO CLUSTERING & 30-DAY CHRONO-HEATMAP ====================
+    col_hourly_bar, col_heatmap = st.columns(2)
+
+    with col_hourly_bar:
+        st.markdown(f"""
+        <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px;">
+            <h4 style="font-size: 1.05rem; font-weight: 600; color: var(--foreground); margin: 0;">24-Hour Desaturation Frequency</h4>
+            <span style="font-size: 0.75rem; font-weight: 600; padding: 2px 8px; border-radius: 9999px; background: #ef444415; color: #ef4444;">
+                Peak Window: {chrono_info['peak_window']}
+            </span>
+        </div>
+        """, unsafe_allow_html=True)
+
+        if not hourly_df.empty:
+            fig_hourly_bar = go.Figure()
+            fig_hourly_bar.add_trace(go.Bar(
+                x=[f"{h:02d}:00" for h in hourly_df["hour"]],
+                y=hourly_df["drops_below_90"],
+                name="Drops <90%",
+                marker=dict(color="#ef4444", opacity=0.85),
+                hovertemplate="<b>Hour:</b> %{x}<br><b>Desaturation Dips:</b> %{y}<extra></extra>"
+            ))
+            fig_hourly_bar.update_layout(
+                template=plotly_template,
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                height=300,
+                margin=dict(l=10, r=10, t=10, b=10),
+                yaxis=dict(title="Event Count", gridcolor=grid_color),
+                xaxis=dict(title="Hour of Day", gridcolor=grid_color)
+            )
+            st.plotly_chart(fig_hourly_bar, use_container_width=True)
+        else:
+            st.info("No hourly aggregated data available.")
+
+    with col_heatmap:
+        st.markdown("""
+        <div style="margin-bottom: 8px;">
+            <h4 style="font-size: 1.05rem; font-weight: 600; color: var(--foreground); margin: 0;">30-Day Multi-Night Chrono-Heatmap</h4>
+        </div>
+        """, unsafe_allow_html=True)
+
+        if not multi_day_hourly.empty:
+            # Pivot into Date x Hour matrix of lowest SpO2
+            pivot_df = multi_day_hourly.pivot(index="date", columns="hour", values="spo2_min")
+            fig_heatmap = go.Figure(data=go.Heatmap(
+                z=pivot_df.values,
+                x=[f"{int(c):02d}:00" for c in pivot_df.columns],
+                y=pivot_df.index,
+                colorscale="RdYlGn",
+                zmin=80,
+                zmax=100,
+                colorbar=dict(title="Min SpO2 %", thickness=12),
+                hovertemplate="<b>Date:</b> %{y}<br><b>Hour:</b> %{x}<br><b>Min SpO2:</b> %{z}%<extra></extra>"
+            ))
+            fig_heatmap.update_layout(
+                template=plotly_template,
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                height=300,
+                margin=dict(l=10, r=10, t=10, b=10),
+                yaxis=dict(gridcolor=grid_color),
+                xaxis=dict(gridcolor=grid_color)
+            )
+            st.plotly_chart(fig_heatmap, use_container_width=True)
+        else:
+            st.info("Accumulating multi-night data for chrono-heatmap...")
+
+    # ==================== CLINICAL CONTEXT & PHYSIOLOGICAL GUIDANCE ====================
+    st.markdown("<div style='height: 20px;'></div>", unsafe_allow_html=True)
+    with st.expander("🩺 Clinical Interpretation & Nocturnal Airway Guidance", expanded=False):
+        st.markdown("""
+        **Physiological Etiology of Overnight SpO2 Drops:**
+        1. **REM Sleep Muscle Atonia:** During REM sleep (which peaks between 03:00 AM and 05:30 AM), skeletal muscle tone is inhibited, causing the pharyngeal airway to collapse more easily if anatomical resistance is present.
+        2. **Positional Airway Resistance:** Sleeping supine (flat on your back) allows the base of the tongue and soft palate to obstruct the airway, multiplying desaturations.
+        3. **Alcohol & Central Depressants:** Alcohol ingested within 3-4 hours of sleep depresses upper airway motor neuron activity and blunts the natural arousal reflex, prolonging desaturation duration.
+
+        **Actionable Recommendations:**
+        - **Positional Therapy:** Train side-sleeping (lateral decubitus) using a contoured or body pillow.
+        - **Airway & Nasal Patency:** Use nasal strips or saline rinse to reduce upper airway resistance.
+        - **Alcohol Curfew:** Ensure at least 3-4 hours between your last drink and bedtime.
+        - **When to Consult a Physician:** If ODI exceeds 15 events/hour or if SpO2 drops consistently below 88%, schedule a formal Level-1 Polysomnography or Home Sleep Apnea Test (HSAT) with a sleep specialist.
+        """)
+
+
+# ==================== TAB 4: BODY COMPOSITION ====================
 with tab_comp:
     st.markdown("<h3 style='font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 16px;'>Body Composition Tracking</h3>", unsafe_allow_html=True)
     
