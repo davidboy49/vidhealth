@@ -126,65 +126,148 @@ def save_result(target_date: str, data: dict) -> Path:
     return out_path
 
 
-def sync_latest(target_date: str | None = None) -> dict:
+def smart_sync(days: int = 3) -> dict:
     """
-    Fetch and persist the latest Garmin data.
-
-    Garmin endpoints are independent, so partial results are saved while endpoint
-    failures are returned as warnings for dashboard and command-line feedback.
+    Smart Rolling Sync: Syncs the last N days (default 3: today, yesterday, 2 days ago).
+    Ensures late-arriving sleep, nocturnal SpO2, and HRV data from Bluetooth watch syncs
+    are reliably captured, and heals any brief multi-day gap.
     """
-    api = get_api()
-    date_str = target_date or date.today().isoformat()
-    print(f"[SYNC] Syncing {date_str}...")
-
-    data = sync_date(api, date_str)
-    synced_sources = sorted(
-        key for key, value in data.items()
-        if key != "date" and not key.endswith("_error") and value
-    )
-    warnings = {
-        key.removesuffix("_error"): value
-        for key, value in data.items()
-        if key.endswith("_error")
-    }
-
-    if not synced_sources:
-        detail = next(iter(warnings.values()), "Garmin returned no data.")
-        raise RuntimeError(f"No Garmin metrics were available for {date_str}. {detail}")
-
-    backup_path = save_result(date_str, data)
-    print(f"[OK] {date_str} - completed sync")
-
-    # Scan and dispatch any health anomaly alerts
-    try:
-        alerts = anomaly_detector.dispatch_alerts_if_needed(date_str)
-        if alerts:
-            print(f"[ALERT] {len(alerts)} health anomalies detected and processed for {date_str}")
-    except Exception as e:
-        print(f"[WARN] Failed to run anomaly check for {date_str}: {e}")
-
-    return {
-        "date": date_str,
-        "sources": synced_sources,
-        "warning_count": len(warnings),
-        "warnings": warnings,
-        "backup_path": str(backup_path),
-    }
-
-def backfill(days: int = 14):
-    """Backfill the last N days of data."""
     api = get_api()
     today = date.today()
+    synced_dates = []
+    failed_dates = []
+    warnings_accum = {}
+
+    print(f"[SMART SYNC] Starting {days}-day rolling sync (from {today.isoformat()})...")
+
+    for i in range(days):
+        d = today - timedelta(days=i)
+        ds = d.isoformat()
+        print(f"[SYNC] Processing {ds} (day -{i})...")
+        try:
+            data = sync_date(api, ds)
+            synced_sources = sorted(
+                key for key, value in data.items()
+                if key != "date" and not key.endswith("_error") and value
+            )
+            day_warnings = {
+                key.removesuffix("_error"): value
+                for key, value in data.items()
+                if key.endswith("_error")
+            }
+            if day_warnings:
+                warnings_accum[ds] = day_warnings
+
+            if synced_sources:
+                save_result(ds, data)
+                synced_dates.append(ds)
+                
+                # Check for anomalies on recent days
+                try:
+                    anomaly_detector.dispatch_alerts_if_needed(ds)
+                except Exception as alert_err:
+                    print(f"[WARN] Anomaly check for {ds}: {alert_err}")
+            else:
+                print(f"[WARN] {ds} - No metric endpoints returned data from Garmin.")
+                failed_dates.append(ds)
+        except Exception as e:
+            print(f"[ERROR] Failed syncing {ds}: {e}")
+            failed_dates.append(ds)
+
+        if i < days - 1:
+            time.sleep(1) # API rate limit buffer
+
+    # Ensure SpO2 high-resolution epochs and event tables are synced
+    try:
+        db.backfill_spo2_epochs_if_needed()
+    except Exception as ep_err:
+        print(f"[WARN] SpO2 backfill check: {ep_err}")
+
+    summary = {
+        "status": "success" if synced_dates else "partial",
+        "synced_dates": synced_dates,
+        "failed_dates": failed_dates,
+        "days_synced": len(synced_dates),
+        "total_requested": days,
+        "warnings": warnings_accum
+    }
+    print(f"[DONE] Smart sync completed. {len(synced_dates)}/{days} days synced.")
+    return summary
+
+
+def sync_latest(target_date: str | None = None) -> dict:
+    """
+    Fetch and persist Garmin data.
+    If target_date is specified, syncs that single date.
+    Otherwise, executes a smart rolling 3-day sync to guarantee no missing sleep/SpO2 records.
+    """
+    if target_date:
+        api = get_api()
+        print(f"[SYNC] Syncing single date: {target_date}...")
+        data = sync_date(api, target_date)
+        synced_sources = sorted(
+            key for key, value in data.items()
+            if key != "date" and not key.endswith("_error") and value
+        )
+        warnings = {
+            key.removesuffix("_error"): value
+            for key, value in data.items()
+            if key.endswith("_error")
+        }
+
+        if not synced_sources:
+            detail = next(iter(warnings.values()), "Garmin returned no data.")
+            raise RuntimeError(f"No Garmin metrics were available for {target_date}. {detail}")
+
+        backup_path = save_result(target_date, data)
+        try:
+            anomaly_detector.dispatch_alerts_if_needed(target_date)
+        except Exception as e:
+            print(f"[WARN] Anomaly check for {target_date}: {e}")
+
+        return {
+            "date": target_date,
+            "sources": synced_sources,
+            "warning_count": len(warnings),
+            "warnings": warnings,
+            "backup_path": str(backup_path),
+        }
+    else:
+        # Default: smart rolling 3-day sync
+        res = smart_sync(days=3)
+        return {
+            "date": date.today().isoformat(),
+            "sources": ["rolling_3_days"],
+            "warning_count": len(res.get("warnings", {})),
+            "warnings": res.get("warnings", {}),
+            "synced_dates": res.get("synced_dates", []),
+            "backup_path": str(DATA_DIR)
+        }
+
+
+def backfill(days: int = 30, force: bool = False) -> dict:
+    """
+    Comprehensive historical backfill across the last N days.
+    - Checks SQLite database and skips already completed days (unless force=True).
+    - Always re-syncs the most recent 3 days for finalized sleep/SpO2 data.
+    - Implements 1-second rate-limiting delays to prevent Garmin 429 errors.
+    - Ingests exact-moment SpO2 desaturation epochs into health.db.
+    """
+    api = get_api()
+    today = date.today()
+    synced_dates = []
+    skipped_dates = []
+    failed_dates = []
+
+    print(f"[BACKFILL] Initiating {days}-day historical backfill (force={force})...")
+
     for i in range(days):
         d = today - timedelta(days=i)
         ds = d.isoformat()
         out_path = DATA_DIR / f"{ds}.json"
-        
-        # Check if already synced in DB or file
-        # Re-sync the last 3 days (i <= 3) so late-arriving watch data
-        # (phone BT sync happens after our cron) gets picked up.
-        # Older days are locked to avoid hammering the API.
-        if out_path.exists() and i > 3:
+
+        # Check if already synced in DB
+        if not force and out_path.exists() and i > 3:
             try:
                 conn = db.get_connection()
                 cursor = conn.cursor()
@@ -192,27 +275,55 @@ def backfill(days: int = 14):
                 row = cursor.fetchone()
                 conn.close()
                 if row:
-                    print(f"[SKIP] {ds} - already synced")
+                    print(f"[SKIP] {ds} - already archived in database")
+                    skipped_dates.append(ds)
                     continue
             except Exception:
                 pass
-        
-        print(f"[SYNC] {ds} - fetching...")
-        data = sync_date(api, ds)
-        save_result(ds, data)
-        print(f"[OK] {ds} - synced")
-        time.sleep(1)  # rate limit safety
-    print(f"\n[DONE] Synced {days} days")
+
+        print(f"[SYNC] {ds} ({i+1}/{days}) - fetching from Garmin...")
+        try:
+            data = sync_date(api, ds)
+            save_result(ds, data)
+            synced_dates.append(ds)
+            print(f"[OK] {ds} - synced and parsed")
+        except Exception as e:
+            print(f"[ERROR] Failed {ds}: {e}")
+            failed_dates.append(ds)
+
+        time.sleep(1) # API rate limit safety
+
+    # Run SpO2 epoch backfill pass across all historical raw JSONs
+    try:
+        db.backfill_spo2_epochs_if_needed()
+    except Exception as ep_err:
+        print(f"[WARN] SpO2 backfill error: {ep_err}")
+
+    summary = {
+        "days_synced": len(synced_dates),
+        "days_skipped": len(skipped_dates),
+        "days_failed": len(failed_dates),
+        "synced_dates": synced_dates,
+        "skipped_dates": skipped_dates
+    }
+    print(f"\n[DONE] Backfill complete: {len(synced_dates)} synced, {len(skipped_dates)} skipped, {len(failed_dates)} failed.")
+    return summary
+
 
 def sync_today() -> dict:
-    """Sync just today (for cron use)."""
-    return sync_latest()
+    """Sync today + rolling 3 days for cron/systemd service use."""
+    return smart_sync(days=3)
+
 
 if __name__ == "__main__":
+    force_flag = "--force" in sys.argv
     if len(sys.argv) > 1 and sys.argv[1] == "backfill":
-        days = int(sys.argv[2]) if len(sys.argv) > 2 else 14
-        backfill(days)
+        days = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 30
+        backfill(days=days, force=force_flag)
+    elif len(sys.argv) > 1 and sys.argv[1] == "smart":
+        days = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 3
+        smart_sync(days=days)
     elif len(sys.argv) > 1 and sys.argv[1] == "today":
         sync_today()
     else:
-        backfill(14)
+        smart_sync(days=3)

@@ -64,9 +64,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
         "🏋️ **Welcome to Hermes Health Coach Bot!**\n\n"
         "Here are the available commands:\n"
+        "🔄 /sync - Smart sync Garmin data (e.g. `/sync` or `/sync 7`)\n"
         "✍️ /log - Interactive daily activity & unholy habit logger\n"
         "📊 /health - Today's health metrics snapshot\n"
         "🧠 /insights - Biometric intelligence & HRV baseline bands\n"
+        "🫁 /spo2 - Nocturnal SpO2 & desaturation drops analysis\n"
         "🚨 /alerts - Check active health anomaly warnings\n"
         "📋 /notes - View your recent logged habits & notes\n"
         "💪 /gym - Today's dynamic gym plan recommendation\n"
@@ -322,6 +324,58 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         status = "🛑 Low readiness (Deload or recovery day)"
         
     await update.message.reply_text(f"❓ **Status:** {status} ({int(readiness)}/100)", parse_mode="Markdown")
+
+
+async def sync_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_auth(update, context):
+        return
+
+    import asyncio
+    import sync
+
+    # Parse optional days argument (e.g. /sync 7)
+    days = 3
+    if context.args and len(context.args) > 0 and context.args[0].isdigit():
+        days = min(60, max(1, int(context.args[0])))
+
+    status_msg = await update.message.reply_text(
+        f"🔄 **Syncing Garmin Health data...**\n"
+        f"Fetching rolling {days}-day window (Sleep, HRV, SpO2, Body Battery)...",
+        parse_mode="Markdown"
+    )
+
+    try:
+        # Run sync in thread pool to prevent blocking the async Telegram event loop
+        loop = asyncio.get_running_loop()
+        res = await loop.run_in_executor(None, sync.smart_sync, days)
+
+        synced = res.get("synced_dates", [])
+        failed = res.get("failed_dates", [])
+
+        # Fetch latest updated record
+        df = db.get_df(limit=1)
+        latest_text = ""
+        if not df.empty:
+            row = df.iloc[-1]
+            latest_text = (
+                f"\n\n📊 **Latest Record ({row['date']}):**\n"
+                f"• **Readiness:** {row.get('training_readiness') or '—'}/100\n"
+                f"• **HRV:** {row.get('hrv_last_night') or '—'} ms (Avg: {row.get('hrv_weekly_avg') or '—'})\n"
+                f"• **Sleep Score:** {row.get('sleep_score') or '—'}/100\n"
+                f"• **SpO2 Avg/Min:** {row.get('spo2_avg') or '—'}% / {row.get('spo2_min') or '—'}%"
+            )
+
+        resp_text = (
+            f"✅ **Garmin Sync Complete!**\n"
+            f"• **Days Synced:** {len(synced)}/{days} ({', '.join(synced[:5])}{'...' if len(synced)>5 else ''})"
+            f"{latest_text}"
+        )
+        if failed:
+            resp_text += f"\n⚠️ *Note: {len(failed)} dates had no data or warnings.*"
+
+        await status_msg.edit_text(resp_text, parse_mode="Markdown")
+    except Exception as e:
+        await status_msg.edit_text(f"❌ **Sync Failed:** {str(e)}", parse_mode="Markdown")
 
 # ---------- ACTIVITY & HABIT LOGGING HANDLERS ----------
 
@@ -729,6 +783,7 @@ def main():
     app.add_handler(CommandHandler("recover", recover_command))
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("spo2", spo2_command))
+    app.add_handler(CommandHandler("sync", sync_command))
     
     # Inline buttons callback handler
     app.add_handler(CallbackQueryHandler(callback_query_handler))

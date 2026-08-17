@@ -302,10 +302,9 @@ with cols_header[2]:
 sync_error = None
 if sync_clicked:
     try:
-        with st.spinner("Syncing Garmin data..."):
-            from sync import sync_latest
-
-            sync_result = sync_latest()
+        with st.spinner("Syncing Garmin data (smart rolling 3-day window)..."):
+            import sync
+            sync_result = sync.smart_sync(days=3)
         st.session_state["garmin_sync_notice"] = sync_result
         st.rerun()
     except ValueError as exc:
@@ -318,13 +317,10 @@ if sync_error:
 
 sync_notice = st.session_state.pop("garmin_sync_notice", None)
 if sync_notice:
-    source_count = len(sync_notice["sources"])
-    warning_count = sync_notice["warning_count"]
-    warning_suffix = f" ({warning_count} endpoint warnings)" if warning_count else ""
-    st.success(
-        f"Garmin data synced for {sync_notice['date']} from "
-        f"{source_count} data sources{warning_suffix}."
-    )
+    synced_list = sync_notice.get("synced_dates", [])
+    count = len(synced_list)
+    dates_str = ", ".join(synced_list) if synced_list else "today"
+    st.success(f"✅ Garmin Smart Sync Complete: Successfully updated {count} day{'s' if count!=1 else ''} ({dates_str}) with finalized sleep & SpO2.")
 # ---------- INITIAL LOADING SCREEN ----------
 loader = st.empty()
 with loader.container():
@@ -2254,216 +2250,307 @@ with tab_recovery:
 
 # ==================== TAB 6: RECORDED DATA EXPLORER ====================
 with tab_data:
-    st.markdown(f"<h3 style='font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 6px; display: flex; align-items: center;'>{LUCIDE_DATABASE} Recorded Data</h3>", unsafe_allow_html=True)
-    st.markdown("<p style='font-size: 0.875rem; color: var(--muted-foreground); margin: 0 0 18px 0;'>Search, filter, inspect, and export the records stored in your local SQLite database.</p>", unsafe_allow_html=True)
+    st.markdown(f"<h3 style='font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 6px; display: flex; align-items: center;'>{LUCIDE_DATABASE} Recorded Data Explorer</h3>", unsafe_allow_html=True)
+    st.markdown("<p style='font-size: 0.875rem; color: var(--muted-foreground); margin: 0 0 18px 0;'>Search, inspect, analyze, and export records across all biometric tables in your local SQLite database.</p>", unsafe_allow_html=True)
 
-    all_data_df = db.get_df(limit=None)
+    # Multi-Dataset Selector
+    dataset_col, spacer_col = st.columns([4, 6])
+    with dataset_col:
+        dataset_choice = st.selectbox(
+            "Select Database Table / Dataset:",
+            options=[
+                "📅 Daily Health Metrics (daily_metrics)",
+                "🫁 Nocturnal SpO2 Drop Events (spo2_drop_events)",
+                "⏰ 24-Hour SpO2 Distribution Matrix (hourly_spo2)",
+                "📋 Activity & Habit Logs (activity_logs)",
+                "⚠️ Health Anomaly Alerts (anomaly_alerts)",
+                "⚖️ Body Composition (body_comp)"
+            ],
+            index=0,
+            key="data_tab_dataset_selector"
+        )
 
-    if all_data_df.empty:
-        st.markdown(f"""
-        <div class="shadcn-alert" style="border-left: 4px solid #6366f1;">
-            <div style="display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 0.875rem;">{LUCIDE_DATABASE} No recorded data found</div>
-            <p style="font-size: 0.875rem; margin: 4px 0 0 0; line-height: 1.5; color: var(--muted-foreground);">
-                The database is initialized, but daily_metrics has no rows yet. Run <code>python sync.py backfill 14</code> after configuring Garmin sync.
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        column_labels = {
-            "date": "Date", "hrv_last_night": "HRV", "hrv_weekly_avg": "HRV 7d Avg",
-            "hrv_status": "HRV Status", "sleep_score": "Sleep Score", "sleep_duration": "Sleep Duration",
-            "sleep_deep": "Deep Sleep", "sleep_light": "Light Sleep", "sleep_rem": "REM Sleep",
-            "sleep_awake": "Awake", "resting_hr": "Resting HR", "min_hr": "Min HR", "max_hr": "Max HR",
-            "bb_max": "Battery Max", "bb_min": "Battery Min", "bb_charged": "Battery Charged", "bb_drained": "Battery Drained",
-            "stress_avg": "Stress Avg", "stress_max": "Stress Max", "steps": "Steps",
-            "floors": "Floors", "training_readiness": "Readiness", "spo2_avg": "SpO2 Avg",
-            "spo2_min": "SpO2 Min", "respiration_avg": "Respiration Avg", "respiration_min": "Respiration Min",
-            "workout_type": "Workout", "alcohol_logged": "Alcohol", "sleep_apnea_flag": "Sleep Apnea", "ai_summary": "AI Summary",
-            "raw_json": "Raw JSON"
-        }
-        metric_groups = {
-            "Essential": ["date", "training_readiness", "hrv_last_night", "sleep_score", "resting_hr", "stress_avg", "steps", "bb_min", "workout_type"],
-            "Recovery": ["date", "training_readiness", "hrv_last_night", "hrv_weekly_avg", "hrv_status", "resting_hr", "stress_avg", "bb_max", "bb_min"],
-            "Sleep": ["date", "sleep_score", "sleep_duration", "sleep_deep", "sleep_light", "sleep_rem", "sleep_awake", "spo2_avg", "spo2_min", "respiration_avg"],
-            "Activity": ["date", "steps", "floors", "min_hr", "max_hr", "bb_charged", "bb_drained", "workout_type"],
-            "Flags": ["date", "alcohol_logged", "sleep_apnea_flag", "spo2_min", "respiration_min", "stress_max", "ai_summary"],
-            "All columns": [col for col in column_labels if col != "raw_json"],
-        }
+    st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
-        data_df = all_data_df.copy()
-        data_df["date"] = pd.to_datetime(data_df["date"], errors="coerce")
-        data_df = data_df.dropna(subset=["date"])
-        min_day = data_df["date"].min().date()
-        max_day = data_df["date"].max().date()
+    # ---------------------------------------------------------
+    # DATASET 1: DAILY HEALTH METRICS (MASTER TABLE)
+    # ---------------------------------------------------------
+    if dataset_choice == "📅 Daily Health Metrics (daily_metrics)":
+        all_data_df = db.get_df(limit=None)
 
-        st.markdown("""
-        <style>
-        .data-card-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
-        .data-mini-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
-        .data-mini-label { color: var(--muted-foreground); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
-        .data-mini-value { color: var(--foreground); font-size: 1.35rem; font-weight: 800; line-height: 1.25; margin-top: 3px; }
-        .data-mini-sub { color: var(--muted-foreground); font-size: 0.78rem; margin-top: 2px; }
-        div[data-testid="stDataFrame"] { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-        @media (max-width: 900px) { .data-card-row { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-        @media (max-width: 520px) { .data-card-row { grid-template-columns: 1fr; } }
-        </style>
-        """, unsafe_allow_html=True)
-
-        filters = st.container(border=True)
-        with filters:
-            search_col, date_col, group_col = st.columns([4, 3, 2])
-            with search_col:
-                search_term = st.text_input(
-                    "Search records",
-                    placeholder="Search date, status, workout, values, notes...",
-                    help="Search is applied across every selected column after date filtering.",
-                )
-            with date_col:
-                selected_range = st.date_input(
-                    "Date range",
-                    value=(min_day, max_day),
-                    min_value=min_day,
-                    max_value=max_day,
-                )
-            with group_col:
-                metric_view = st.selectbox("Metric set", list(metric_groups.keys()), index=0)
-
-            sort_col, row_col, extra_col = st.columns([2, 2, 5])
-            with sort_col:
-                sort_order = st.selectbox("Sort", ["Newest first", "Oldest first"], index=0)
-            with row_col:
-                row_limit = st.selectbox("Rows shown", [50, 100, 250, 500, "All"], index=1)
-            with extra_col:
-                optional_cols = [c for c in column_labels if c in data_df.columns and c not in metric_groups[metric_view] and c != "raw_json"]
-                extra_cols = st.multiselect(
-                    "Add columns",
-                    optional_cols,
-                    format_func=lambda c: column_labels.get(c, c),
-                    placeholder="Choose additional fields",
-                )
-
-        include_raw_json = st.checkbox("Include raw JSON in table and export", value=False)
-
-        selected_cols = [c for c in metric_groups[metric_view] if c in data_df.columns]
-        selected_cols.extend([c for c in extra_cols if c not in selected_cols])
-        if include_raw_json and "raw_json" in data_df.columns:
-            selected_cols.append("raw_json")
-        if "date" not in selected_cols:
-            selected_cols.insert(0, "date")
-
-        if isinstance(selected_range, tuple) and len(selected_range) == 2:
-            start_day, end_day = selected_range
+        if all_data_df.empty:
+            st.info("No recorded daily metrics found. Click 'Sync Garmin' or run `python sync.py backfill 30`.")
         else:
-            start_day, end_day = min_day, max_day
+            # Enrich with Derived Sports-Science & Clinical Columns
+            data_df = all_data_df.copy()
+            data_df["date"] = pd.to_datetime(data_df["date"], errors="coerce")
+            data_df = data_df.dropna(subset=["date"])
+            
+            # 1. HRV Delta vs 7d Baseline
+            if "hrv_last_night" in data_df.columns and "hrv_weekly_avg" in data_df.columns:
+                data_df["hrv_delta_7d"] = data_df["hrv_last_night"] - data_df["hrv_weekly_avg"]
+            else:
+                data_df["hrv_delta_7d"] = None
 
-        filtered_df = data_df[(data_df["date"].dt.date >= start_day) & (data_df["date"].dt.date <= end_day)].copy()
-        filtered_df = filtered_df.sort_values("date", ascending=(sort_order == "Oldest first"))
+            # 2. Deep + REM Sleep Architecture %
+            if "sleep_duration" in data_df.columns and "sleep_deep" in data_df.columns and "sleep_rem" in data_df.columns:
+                data_df["deep_rem_pct"] = (
+                    (data_df["sleep_deep"].fillna(0) + data_df["sleep_rem"].fillna(0)) / 
+                    data_df["sleep_duration"].replace(0, np.nan) * 100.0
+                ).round(1)
+            else:
+                data_df["deep_rem_pct"] = None
 
-        search_source = filtered_df[selected_cols].copy()
-        if search_term.strip():
-            normalized_query = search_term.strip()
-            search_mask = search_source.astype(str).apply(
-                lambda row: row.str.contains(normalized_query, case=False, na=False, regex=False).any(),
-                axis=1,
-            )
-            filtered_df = filtered_df[search_mask]
+            # 3. Sleep Efficiency %
+            if "sleep_duration" in data_df.columns and "sleep_awake" in data_df.columns:
+                data_df["sleep_efficiency_pct"] = (
+                    data_df["sleep_duration"].fillna(0) / 
+                    (data_df["sleep_duration"].fillna(0) + data_df["sleep_awake"].fillna(0)).replace(0, np.nan) * 100.0
+                ).round(1)
+            else:
+                data_df["sleep_efficiency_pct"] = None
 
-        total_records = len(data_df)
-        matched_records = len(filtered_df)
-        export_df = filtered_df[selected_cols].copy()
+            # 4. Net Energy Balance (Battery Charged vs Drained)
+            if "bb_charged" in data_df.columns and "bb_drained" in data_df.columns:
+                data_df["net_energy_charge"] = data_df["bb_charged"].fillna(0) - data_df["bb_drained"].fillna(0)
+            else:
+                data_df["net_energy_charge"] = None
 
-        shown_df = export_df.copy()
-        if row_limit != "All":
-            shown_df = shown_df.head(int(row_limit))
+            column_labels = {
+                "date": "Date", "hrv_last_night": "HRV (ms)", "hrv_weekly_avg": "HRV 7d Avg",
+                "hrv_delta_7d": "HRV Delta (ms)", "hrv_status": "HRV Status", "sleep_score": "Sleep Score",
+                "sleep_duration": "Sleep Duration", "deep_rem_pct": "Deep+REM %", "sleep_efficiency_pct": "Sleep Efficiency %",
+                "sleep_deep": "Deep Sleep", "sleep_light": "Light Sleep", "sleep_rem": "REM Sleep",
+                "sleep_awake": "Awake", "resting_hr": "Resting HR", "min_hr": "Min HR", "max_hr": "Max HR",
+                "bb_max": "Battery Max", "bb_min": "Battery Min", "bb_charged": "Battery Charged",
+                "bb_drained": "Battery Drained", "net_energy_charge": "Net Battery Balance",
+                "stress_avg": "Stress Avg", "stress_max": "Stress Max", "steps": "Steps",
+                "floors": "Floors", "training_readiness": "Readiness", "spo2_avg": "SpO2 Avg (%)",
+                "spo2_min": "SpO2 Min (%)", "respiration_avg": "Respiration Avg", "respiration_min": "Respiration Min",
+                "workout_type": "Workout", "alcohol_logged": "Alcohol", "sleep_apnea_flag": "Sleep Apnea",
+                "ai_summary": "AI Summary", "raw_json": "Raw JSON"
+            }
 
-        def seconds_to_duration(value):
-            if pd.isna(value):
-                return "-"
-            value = int(value)
-            hours = value // 3600
-            minutes = (value % 3600) // 60
-            return f"{hours}h {minutes}m"
+            metric_groups = {
+                "Essential": ["date", "training_readiness", "hrv_last_night", "hrv_delta_7d", "sleep_score", "resting_hr", "stress_avg", "steps", "bb_min", "workout_type"],
+                "Derived Science": ["date", "training_readiness", "hrv_last_night", "hrv_delta_7d", "sleep_score", "deep_rem_pct", "sleep_efficiency_pct", "net_energy_charge", "spo2_avg", "spo2_min"],
+                "Recovery": ["date", "training_readiness", "hrv_last_night", "hrv_weekly_avg", "hrv_delta_7d", "hrv_status", "resting_hr", "stress_avg", "bb_max", "bb_min"],
+                "Sleep Architecture": ["date", "sleep_score", "sleep_duration", "deep_rem_pct", "sleep_efficiency_pct", "sleep_deep", "sleep_light", "sleep_rem", "sleep_awake", "spo2_min"],
+                "Respiratory & SpO2": ["date", "spo2_avg", "spo2_min", "respiration_avg", "respiration_min", "sleep_apnea_flag", "sleep_score"],
+                "Activity & Load": ["date", "steps", "floors", "min_hr", "max_hr", "bb_charged", "bb_drained", "net_energy_charge", "workout_type"],
+                "All Columns": [col for col in column_labels if col != "raw_json"]
+            }
 
-        def format_for_display(frame):
-            display = frame.copy()
-            if "date" in display.columns:
-                display["date"] = pd.to_datetime(display["date"]).dt.strftime("%Y-%m-%d")
-            for duration_col in ["sleep_duration", "sleep_deep", "sleep_light", "sleep_rem", "sleep_awake"]:
-                if duration_col in display.columns:
-                    display[duration_col] = display[duration_col].apply(seconds_to_duration)
-            for flag_col in ["alcohol_logged", "sleep_apnea_flag"]:
-                if flag_col in display.columns:
-                    display[flag_col] = display[flag_col].map({1: "Yes", 0: "No"}).fillna("-")
-            for text_col in ["hrv_status", "workout_type", "ai_summary", "raw_json"]:
-                if text_col in display.columns:
-                    display[text_col] = display[text_col].fillna("-").replace("", "-")
-            return display.rename(columns={col: column_labels.get(col, col) for col in display.columns})
+            min_day = data_df["date"].min().date()
+            max_day = data_df["date"].max().date()
 
-        display_df = format_for_display(shown_df)
-        date_span = f"{start_day:%b %d, %Y} to {end_day:%b %d, %Y}"
-        avg_hrv = filtered_df["hrv_last_night"].mean() if "hrv_last_night" in filtered_df.columns else None
-        avg_sleep = filtered_df["sleep_score"].mean() if "sleep_score" in filtered_df.columns else None
-        total_steps = filtered_df["steps"].sum() if "steps" in filtered_df.columns else None
-        avg_hrv_display = f"{avg_hrv:.0f} ms" if avg_hrv is not None and pd.notna(avg_hrv) else "-"
-        total_steps_display = f"{int(total_steps):,}" if total_steps is not None and pd.notna(total_steps) else "-"
+            filters = st.container(border=True)
+            with filters:
+                search_col, date_col, group_col = st.columns([4, 3, 3])
+                with search_col:
+                    search_term = st.text_input(
+                        "Search daily metrics",
+                        placeholder="Search date, status, workout, values...",
+                        key="daily_search_term"
+                    )
+                with date_col:
+                    selected_range = st.date_input(
+                        "Date range",
+                        value=(min_day, max_day),
+                        min_value=min_day,
+                        max_value=max_day,
+                        key="daily_date_range"
+                    )
+                with group_col:
+                    metric_view = st.selectbox("Preset View", list(metric_groups.keys()), index=0, key="daily_metric_preset")
 
-        st.markdown(f"""
-        <div class="data-card-row">
-            <div class="data-mini-card"><div class="data-mini-label">Matches</div><div class="data-mini-value">{matched_records:,}</div><div class="data-mini-sub">of {total_records:,} stored records</div></div>
-            <div class="data-mini-card"><div class="data-mini-label">Date Window</div><div class="data-mini-value" style="font-size: 1rem;">{date_span}</div><div class="data-mini-sub">filtered from daily_metrics</div></div>
-            <div class="data-mini-card"><div class="data-mini-label">Average HRV</div><div class="data-mini-value">{avg_hrv_display}</div><div class="data-mini-sub">visible result set</div></div>
-            <div class="data-mini-card"><div class="data-mini-label">Total Steps</div><div class="data-mini-value">{total_steps_display}</div><div class="data-mini-sub">visible result set</div></div>
-        </div>
-        """, unsafe_allow_html=True)
+                sort_col, row_col, extra_col = st.columns([2, 2, 5])
+                with sort_col:
+                    sort_order = st.selectbox("Sort", ["Newest first", "Oldest first"], index=0, key="daily_sort")
+                with row_col:
+                    row_limit = st.selectbox("Rows shown", [50, 100, 250, 500, "All"], index=1, key="daily_row_limit")
+                with extra_col:
+                    optional_cols = [c for c in column_labels if c in data_df.columns and c not in metric_groups[metric_view] and c != "raw_json"]
+                    extra_cols = st.multiselect(
+                        "Add optional columns",
+                        optional_cols,
+                        format_func=lambda c: column_labels.get(c, c),
+                        key="daily_extra_cols"
+                    )
 
-        table_col, export_col = st.columns([7, 2])
-        with table_col:
-            st.markdown(f"<div style='font-size: 0.8125rem; color: var(--muted-foreground); margin-bottom: 8px;'>{LUCIDE_SEARCH} Showing {len(display_df):,} row{'s' if len(display_df) != 1 else ''}{' after search' if search_term.strip() else ''}</div>", unsafe_allow_html=True)
-        with export_col:
-            st.download_button(
-                label="Export CSV",
-                data=export_df.to_csv(index=False).encode("utf-8"),
-                file_name=f"my_health_records_{date.today().isoformat()}.csv",
-                mime="text/csv",
-                use_container_width=True,
-            )
+            selected_cols = [c for c in metric_groups[metric_view] if c in data_df.columns]
+            selected_cols.extend([c for c in extra_cols if c not in selected_cols])
+            if "date" not in selected_cols:
+                selected_cols.insert(0, "date")
 
-        if display_df.empty:
-            st.markdown("""
-            <div class="shadcn-alert">
-                <div style="font-weight: 700; font-size: 0.875rem;">No matching records</div>
-                <p style="font-size: 0.875rem; margin: 4px 0 0 0; color: var(--muted-foreground);">Try a wider date range, fewer columns, or a broader search term.</p>
+            if isinstance(selected_range, tuple) and len(selected_range) == 2:
+                start_day, end_day = selected_range
+            else:
+                start_day, end_day = min_day, max_day
+
+            filtered_df = data_df[(data_df["date"].dt.date >= start_day) & (data_df["date"].dt.date <= end_day)].copy()
+            filtered_df = filtered_df.sort_values("date", ascending=(sort_order == "Oldest first"))
+
+            if search_term.strip():
+                normalized_query = search_term.strip()
+                search_source = filtered_df[selected_cols].copy()
+                search_mask = search_source.astype(str).apply(
+                    lambda row: row.str.contains(normalized_query, case=False, na=False, regex=False).any(),
+                    axis=1,
+                )
+                filtered_df = filtered_df[search_mask]
+
+            total_records = len(data_df)
+            matched_records = len(filtered_df)
+            export_df = filtered_df[selected_cols].copy()
+
+            shown_df = export_df.copy()
+            if row_limit != "All":
+                shown_df = shown_df.head(int(row_limit))
+
+            def seconds_to_duration(value):
+                if pd.isna(value):
+                    return "-"
+                value = int(value)
+                hours = value // 3600
+                minutes = (value % 3600) // 60
+                return f"{hours}h {minutes}m"
+
+            def format_for_display(frame):
+                display = frame.copy()
+                if "date" in display.columns:
+                    display["date"] = pd.to_datetime(display["date"]).dt.strftime("%Y-%m-%d")
+                for duration_col in ["sleep_duration", "sleep_deep", "sleep_light", "sleep_rem", "sleep_awake"]:
+                    if duration_col in display.columns:
+                        display[duration_col] = display[duration_col].apply(seconds_to_duration)
+                for flag_col in ["alcohol_logged", "sleep_apnea_flag"]:
+                    if flag_col in display.columns:
+                        display[flag_col] = display[flag_col].map({1: "Yes", 0: "No"}).fillna("-")
+                for text_col in ["hrv_status", "workout_type", "ai_summary", "raw_json"]:
+                    if text_col in display.columns:
+                        display[text_col] = display[text_col].fillna("-").replace("", "-")
+                return display.rename(columns={col: column_labels.get(col, col) for col in display.columns})
+
+            display_df = format_for_display(shown_df)
+            date_span = f"{start_day:%b %d, %Y} to {end_day:%b %d, %Y}"
+            avg_hrv = filtered_df["hrv_last_night"].mean() if "hrv_last_night" in filtered_df.columns else None
+            avg_readiness = filtered_df["training_readiness"].mean() if "training_readiness" in filtered_df.columns else None
+            avg_sleep = filtered_df["sleep_score"].mean() if "sleep_score" in filtered_df.columns else None
+            total_steps = filtered_df["steps"].sum() if "steps" in filtered_df.columns else None
+
+            # Mini KPI Summary Cards
+            st.markdown(f"""
+            <div class="data-card-row">
+                <div class="data-mini-card"><div class="data-mini-label">Matches</div><div class="data-mini-value">{matched_records:,}</div><div class="data-mini-sub">of {total_records:,} stored records</div></div>
+                <div class="data-mini-card"><div class="data-mini-label">Average Readiness</div><div class="data-mini-value">{avg_readiness:.0f}/100</div><div class="data-mini-sub">across filtered window</div></div>
+                <div class="data-mini-card"><div class="data-mini-label">Average HRV</div><div class="data-mini-value">{f"{avg_hrv:.0f} ms" if pd.notna(avg_hrv) else "-"}</div><div class="data-mini-sub">across filtered window</div></div>
+                <div class="data-mini-card"><div class="data-mini-label">Total Steps</div><div class="data-mini-value">{f"{int(total_steps):,}" if pd.notna(total_steps) else "-"}</div><div class="data-mini-sub">across filtered window</div></div>
             </div>
             """, unsafe_allow_html=True)
-        else:
+
+            table_col, export_col = st.columns([7, 2])
+            with table_col:
+                st.markdown(f"<div style='font-size: 0.8125rem; color: var(--muted-foreground); margin-bottom: 8px;'>Showing {len(display_df):,} row{'s' if len(display_df) != 1 else ''}</div>", unsafe_allow_html=True)
+            with export_col:
+                st.download_button(
+                    label="📥 Export Daily CSV",
+                    data=export_df.to_csv(index=False).encode("utf-8"),
+                    file_name=f"vidhealth_daily_metrics_{date.today().isoformat()}.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                    key="download_daily_metrics_csv"
+                )
+
             st.dataframe(
                 display_df,
                 use_container_width=True,
                 hide_index=True,
-                height=520,
-                column_config={
-                    "Date": st.column_config.TextColumn("Date", help="Recorded metric date"),
-                    "HRV": st.column_config.NumberColumn("HRV", help="Last night average HRV in ms", format="%d ms"),
-                    "HRV 7d Avg": st.column_config.NumberColumn("HRV 7d Avg", format="%d ms"),
-                    "Sleep Score": st.column_config.NumberColumn("Sleep Score", format="%d / 100"),
-                    "Resting HR": st.column_config.NumberColumn("Resting HR", format="%d bpm"),
-                    "Stress Avg": st.column_config.NumberColumn("Stress Avg", format="%d"),
-                    "Readiness": st.column_config.NumberColumn("Readiness", format="%d / 100"),
-                    "Steps": st.column_config.NumberColumn("Steps", format="%d"),
-                    "SpO2 Avg": st.column_config.NumberColumn("SpO2 Avg", format="%.1f%%"),
-                    "SpO2 Min": st.column_config.NumberColumn("SpO2 Min", format="%d%%"),
-                    "Respiration Avg": st.column_config.NumberColumn("Respiration Avg", format="%.1f"),
-                },
+                height=500
             )
 
-        if avg_sleep is not None and pd.notna(avg_sleep):
-            st.caption(f"Filtered average sleep score: {avg_sleep:.0f}/100")
+    # ---------------------------------------------------------
+    # DATASET 2: NOCTURNAL SpO2 DROP EVENTS
+    # ---------------------------------------------------------
+    elif dataset_choice == "🫁 Nocturnal SpO2 Drop Events (spo2_drop_events)":
+        events_df = db.get_all_spo2_events_df(days=None)
+        if events_df.empty:
+            st.info("No nocturnal SpO2 drop events recorded in database yet.")
+        else:
+            filt_c1, filt_c2, filt_c3 = st.columns([4, 3, 3])
+            with filt_c1:
+                sev_choice = st.selectbox("Severity Filter:", ["All", "CRITICAL", "WARNING", "MILD"], key="data_sev_filter")
+            with filt_c2:
+                sort_ev = st.selectbox("Sort Order:", ["Newest First", "Oldest First", "Lowest SpO2 First"], key="data_ev_sort")
+            with filt_c3:
+                st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+                st.download_button(
+                    label="📥 Export SpO2 Drops CSV",
+                    data=events_df.to_csv(index=False).encode("utf-8"),
+                    file_name=f"vidhealth_spo2_drops_{date.today().isoformat()}.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                    key="download_ev_csv"
+                )
 
-        # Activity Logs & Habits Table
-        st.markdown("<div style='margin-top: 32px;'></div>", unsafe_allow_html=True)
-        st.markdown(f"<h4 style='font-size: 1.125rem; font-weight: 700; letter-spacing: -0.01em; margin-bottom: 12px; display: flex; align-items: center;'>{LUCIDE_ACTIVITY} Activity Logs & Habits History</h4>", unsafe_allow_html=True)
-        
-        logs_df = db.get_activity_logs_df(limit=200)
+            f_ev_df = events_df.copy()
+            if sev_choice != "All":
+                f_ev_df = f_ev_df[f_ev_df["severity"] == sev_choice]
+
+            if sort_ev == "Newest First":
+                f_ev_df = f_ev_df.sort_values(by=["date", "nadir_time"], ascending=[False, False])
+            elif sort_ev == "Oldest First":
+                f_ev_df = f_ev_df.sort_values(by=["date", "nadir_time"], ascending=[True, True])
+            elif sort_ev == "Lowest SpO2 First":
+                f_ev_df = f_ev_df.sort_values(by="nadir_spo2", ascending=True)
+
+            st.dataframe(
+                f_ev_df.rename(columns={
+                    "id": "ID", "date": "Date", "start_time": "Onset",
+                    "nadir_time": "Exact Nadir Moment", "end_time": "Recovery",
+                    "duration_seconds": "Duration (s)", "baseline_spo2": "Baseline %",
+                    "nadir_spo2": "Nadir SpO2 %", "drop_magnitude": "Drop Depth (%)",
+                    "sleep_stage": "Sleep Stage", "respiration_rate": "Respiration (brpm)",
+                    "severity": "Severity", "event_type": "Type"
+                }),
+                use_container_width=True,
+                hide_index=True,
+                height=520
+            )
+
+    # ---------------------------------------------------------
+    # DATASET 3: 24-HOUR SpO2 DISTRIBUTION MATRIX
+    # ---------------------------------------------------------
+    elif dataset_choice == "⏰ 24-Hour SpO2 Distribution Matrix (hourly_spo2)":
+        hourly_mat_df = db.get_multi_day_hourly_spo2_df(days=None)
+        if hourly_mat_df.empty:
+            st.info("No hourly aggregated SpO2 matrix data found.")
+        else:
+            st.download_button(
+                label="📥 Export Hourly SpO2 CSV",
+                data=hourly_mat_df.to_csv(index=False).encode("utf-8"),
+                file_name=f"vidhealth_hourly_spo2_{date.today().isoformat()}.csv",
+                mime="text/csv",
+                key="download_hourly_spo2_csv"
+            )
+            st.dataframe(
+                hourly_mat_df.rename(columns={
+                    "id": "ID", "date": "Date", "hour": "Hour (0-23)",
+                    "spo2_avg": "SpO2 Avg %", "spo2_min": "SpO2 Min %",
+                    "spo2_max": "SpO2 Max %", "sample_count": "Samples",
+                    "drops_below_90": "Drops <90%", "drops_below_85": "Drops <85%",
+                    "hypoxic_minutes": "Hypoxic Mins", "respiration_avg": "Respiration Avg",
+                    "dominant_sleep_stage": "Dominant Stage", "lowest_timestamp": "Lowest Nadir Time"
+                }),
+                use_container_width=True,
+                hide_index=True,
+                height=520
+            )
+
+    # ---------------------------------------------------------
+    # DATASET 4: ACTIVITY & HABIT LOGS
+    # ---------------------------------------------------------
+    elif dataset_choice == "📋 Activity & Habit Logs (activity_logs)":
+        logs_df = db.get_activity_logs_df(limit=500)
         if logs_df.empty:
             st.info("No activity or habit logs recorded yet. Use /log on Telegram or the Today tab.")
         else:
@@ -2479,10 +2566,10 @@ with tab_data:
                     }),
                     use_container_width=True,
                     hide_index=True,
-                    height=260
+                    height=450
                 )
             with col_log_del:
-                with st.form("delete_log_form"):
+                with st.form("delete_log_form_main"):
                     del_id = st.number_input("Delete Log ID", min_value=1, step=1)
                     if st.form_submit_button("Delete Entry", use_container_width=True):
                         if db.delete_activity_log(int(del_id)):
@@ -2491,11 +2578,11 @@ with tab_data:
                         else:
                             st.error(f"No entry found with ID #{del_id}")
 
-        # Anomaly Alerts History Table
-        st.markdown("<div style='margin-top: 24px;'></div>", unsafe_allow_html=True)
-        st.markdown(f"<h4 style='font-size: 1.125rem; font-weight: 700; letter-spacing: -0.01em; margin-bottom: 12px; display: flex; align-items: center;'>{LUCIDE_ALERT_TRIANGLE} Health Anomaly Alerts History</h4>", unsafe_allow_html=True)
-        
-        alerts_list = db.get_recent_alerts(limit=50)
+    # ---------------------------------------------------------
+    # DATASET 5: HEALTH ANOMALY ALERTS
+    # ---------------------------------------------------------
+    elif dataset_choice == "⚠️ Health Anomaly Alerts (anomaly_alerts)":
+        alerts_list = db.get_recent_alerts(limit=200)
         if not alerts_list:
             st.info("No historical anomaly alerts recorded.")
         else:
@@ -2507,5 +2594,23 @@ with tab_data:
                 }),
                 use_container_width=True,
                 hide_index=True,
-                height=220
+                height=450
+            )
+
+    # ---------------------------------------------------------
+    # DATASET 6: BODY COMPOSITION
+    # ---------------------------------------------------------
+    elif dataset_choice == "⚖️ Body Composition (body_comp)":
+        body_df = db.get_body_comp_df(limit=365)
+        if body_df.empty:
+            st.info("No body composition entries logged yet. Add entries in the Body Composition tab.")
+        else:
+            st.dataframe(
+                body_df.rename(columns={
+                    "date": "Date", "weight": "Weight (kg)",
+                    "body_fat": "Body Fat (%)", "waist": "Waist Circumference (cm)"
+                }),
+                use_container_width=True,
+                hide_index=True,
+                height=450
             )
