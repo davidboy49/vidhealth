@@ -1,154 +1,282 @@
-import sqlite3
+"""
+PostgreSQL persistence layer for the Hermes health tracker.
+
+Migrated from SQLite. The public API (get_df, save_day, log_activity, ...) is
+unchanged, so bot.py, dashboard.py, analytics.py and friends need no changes.
+
+Date/time columns are deliberately kept as TEXT holding ISO-8601 strings
+("YYYY-MM-DD" and "YYYY-MM-DD HH:MM:SS"), exactly as SQLite stored them.
+Callers rely on that: bot.py does strptime(row["date"], "%Y-%m-%d") and several
+modules compare dates as plain strings. ISO-8601 sorts lexicographically, so
+ORDER BY and >= comparisons stay correct.
+"""
 import json
 import math
+import os
+import warnings
+from contextlib import contextmanager
 from pathlib import Path
 from datetime import datetime, date, timedelta
 
-DB_PATH = Path(__file__).parent / "health.db"
+import psycopg
+from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).parent / ".env")
+except ImportError:
+    pass
+
+# Legacy SQLite file. Only migrate_sqlite_to_postgres.py still looks at this.
+SQLITE_PATH = Path(__file__).parent / "health.db"
+
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+
+_pool: ConnectionPool | None = None
+_schema_ready = False
+
+# Arbitrary but fixed key so concurrent workers serialise their schema check
+# instead of racing each other inside CREATE TABLE IF NOT EXISTS.
+_SCHEMA_LOCK_KEY = 8410327755201
+
+
+def _dsn() -> str:
+    if not DATABASE_URL:
+        raise RuntimeError(
+            "DATABASE_URL is not set. Add it to the .env file next to db.py, e.g.\n"
+            "  DATABASE_URL=postgresql://health_user:PASSWORD@HOST:5432/health"
+        )
+    return DATABASE_URL
+
+
+def get_pool() -> ConnectionPool:
+    """Process-wide connection pool, created on first use."""
+    global _pool
+    if _pool is None:
+        pool = ConnectionPool(
+            _dsn(),
+            min_size=1,
+            max_size=int(os.environ.get("DB_POOL_MAX", "5")),
+            timeout=30,
+            max_idle=300,
+            kwargs={"connect_timeout": 15, "application_name": "hermes-health"},
+            open=False,
+        )
+        pool.open()
+        _pool = pool
+    return _pool
+
 
 def get_connection():
-    return sqlite3.connect(DB_PATH)
+    """
+    Opens a new standalone connection; the caller owns it and must close it.
+
+    db.py itself goes through the pooled _conn() helper. This is kept for
+    external callers (sync.py) that use the open/use/close pattern inherited
+    from the sqlite3 version.
+    """
+    return psycopg.connect(_dsn(), connect_timeout=15)
+
+
+@contextmanager
+def _conn(ensure_schema: bool = True):
+    """Pooled connection: commits on clean exit, rolls back if the body raises."""
+    if ensure_schema:
+        init_db()
+    with get_pool().connection() as conn:
+        yield conn
+
+
+def _read_sql(query: str, params=None):
+    """
+    pd.read_sql_query over a pooled connection.
+
+    pandas warns that it "only supports SQLAlchemy connectable"; for plain reads
+    it falls through to a generic DBAPI cursor path that psycopg satisfies, so
+    the warning is just noise here.
+    """
+    import pandas as pd
+    with _conn() as conn:
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message=".*SQLAlchemy.*")
+            return pd.read_sql_query(query, conn, params=params)
+
+
+def _fetch_dicts(query: str, params=None) -> list[dict]:
+    """Runs a SELECT on a pooled connection and returns plain dict rows."""
+    with _conn() as conn:
+        with conn.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(query, params or ())
+            return [dict(r) for r in cursor.fetchall()]
+
+
+_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS daily_metrics (
+    date                TEXT PRIMARY KEY,
+    hrv_last_night      INTEGER,
+    hrv_weekly_avg      INTEGER,
+    hrv_status          TEXT,
+    sleep_score         INTEGER,
+    sleep_duration      INTEGER,
+    sleep_deep          INTEGER,
+    sleep_light         INTEGER,
+    sleep_rem           INTEGER,
+    sleep_awake         INTEGER,
+    resting_hr          INTEGER,
+    min_hr              INTEGER,
+    max_hr              INTEGER,
+    bb_max              INTEGER,
+    bb_min              INTEGER,
+    bb_charged          INTEGER,
+    bb_drained          INTEGER,
+    stress_avg          INTEGER,
+    stress_max          INTEGER,
+    steps               INTEGER,
+    floors              INTEGER,
+    training_readiness  INTEGER,
+    spo2_avg            DOUBLE PRECISION,
+    spo2_min            INTEGER,
+    respiration_avg     DOUBLE PRECISION,
+    respiration_min     DOUBLE PRECISION,
+    workout_type        TEXT,
+    alcohol_logged      INTEGER DEFAULT 0,
+    sleep_apnea_flag    INTEGER DEFAULT 0,
+    ai_summary          TEXT,
+    raw_json            TEXT
+);
+
+CREATE TABLE IF NOT EXISTS body_comp (
+    date        TEXT PRIMARY KEY,
+    weight      DOUBLE PRECISION,
+    body_fat    DOUBLE PRECISION,
+    waist       DOUBLE PRECISION
+);
+
+CREATE TABLE IF NOT EXISTS activity_logs (
+    id          BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    date        TEXT NOT NULL,
+    timestamp   TEXT NOT NULL,
+    category    TEXT NOT NULL,
+    tag         TEXT NOT NULL,
+    note        TEXT,
+    value       DOUBLE PRECISION
+);
+
+CREATE TABLE IF NOT EXISTS anomaly_alerts (
+    id              BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    date            TEXT NOT NULL,
+    timestamp       TEXT NOT NULL,
+    severity        TEXT NOT NULL,
+    alert_type      TEXT NOT NULL,
+    message         TEXT NOT NULL,
+    metrics_json    TEXT,
+    acknowledged    INTEGER DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS spo2_epochs (
+    id                  BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    date                TEXT NOT NULL,
+    -- Garmin hands back millisecond epochs (~1.7e12), which overflows int4.
+    timestamp           BIGINT,
+    time_str            TEXT NOT NULL,
+    spo2_value          INTEGER NOT NULL,
+    respiration_rate    DOUBLE PRECISION,
+    sleep_stage         TEXT,
+    epoch_type          TEXT DEFAULT 'SLEEP'
+);
+
+CREATE TABLE IF NOT EXISTS spo2_drop_events (
+    id                  BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    date                TEXT NOT NULL,
+    start_time          TEXT NOT NULL,
+    nadir_time          TEXT NOT NULL,
+    end_time            TEXT NOT NULL,
+    duration_seconds    INTEGER NOT NULL,
+    baseline_spo2       DOUBLE PRECISION NOT NULL,
+    nadir_spo2          INTEGER NOT NULL,
+    drop_magnitude      DOUBLE PRECISION NOT NULL,
+    sleep_stage         TEXT,
+    respiration_rate    DOUBLE PRECISION,
+    severity            TEXT NOT NULL,
+    event_type          TEXT DEFAULT 'DESATURATION'
+);
+
+CREATE TABLE IF NOT EXISTS hourly_spo2 (
+    id                      BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    date                    TEXT NOT NULL,
+    hour                    INTEGER NOT NULL,
+    spo2_avg                DOUBLE PRECISION,
+    spo2_min                INTEGER,
+    spo2_max                INTEGER,
+    sample_count            INTEGER DEFAULT 0,
+    drops_below_90          INTEGER DEFAULT 0,
+    drops_below_85          INTEGER DEFAULT 0,
+    hypoxic_minutes         DOUBLE PRECISION DEFAULT 0.0,
+    respiration_avg         DOUBLE PRECISION,
+    dominant_sleep_stage    TEXT,
+    lowest_timestamp        TEXT,
+    UNIQUE (date, hour)
+);
+
+CREATE TABLE IF NOT EXISTS garmin_activities (
+    -- Garmin activity ids are already past 2^31, so this must be BIGINT.
+    activity_id                 BIGINT PRIMARY KEY,
+    date                        TEXT NOT NULL,
+    start_time                  TEXT NOT NULL,
+    activity_name               TEXT,
+    activity_type               TEXT,
+    duration_seconds            DOUBLE PRECISION,
+    elapsed_duration_seconds    DOUBLE PRECISION,
+    distance_meters             DOUBLE PRECISION,
+    calories                    DOUBLE PRECISION,
+    avg_hr                      DOUBLE PRECISION,
+    max_hr                      DOUBLE PRECISION,
+    aerobic_training_effect     DOUBLE PRECISION,
+    anaerobic_training_effect   DOUBLE PRECISION,
+    avg_speed                   DOUBLE PRECISION,
+    max_speed                   DOUBLE PRECISION,
+    elevation_gain              DOUBLE PRECISION,
+    steps                       INTEGER,
+    raw_json                    TEXT
+);
+
+-- SQLite got by without these; Postgres uses them for the dashboard's
+-- date-range scans and the per-date SpO2 lookups.
+CREATE INDEX IF NOT EXISTS idx_activity_logs_date     ON activity_logs (date);
+CREATE INDEX IF NOT EXISTS idx_anomaly_alerts_date    ON anomaly_alerts (date);
+CREATE INDEX IF NOT EXISTS idx_anomaly_alerts_ack     ON anomaly_alerts (acknowledged);
+CREATE INDEX IF NOT EXISTS idx_spo2_epochs_date       ON spo2_epochs (date);
+CREATE INDEX IF NOT EXISTS idx_spo2_drop_events_date  ON spo2_drop_events (date);
+CREATE INDEX IF NOT EXISTS idx_hourly_spo2_date       ON hourly_spo2 (date);
+CREATE INDEX IF NOT EXISTS idx_garmin_activities_date ON garmin_activities (date);
+CREATE INDEX IF NOT EXISTS idx_garmin_activities_st   ON garmin_activities (start_time);
+"""
+
 
 def init_db():
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS daily_metrics (
-        date TEXT PRIMARY KEY,
-        hrv_last_night INTEGER,
-        hrv_weekly_avg INTEGER,
-        hrv_status TEXT,
-        sleep_score INTEGER,
-        sleep_duration INTEGER,
-        sleep_deep INTEGER,
-        sleep_light INTEGER,
-        sleep_rem INTEGER,
-        sleep_awake INTEGER,
-        resting_hr INTEGER,
-        min_hr INTEGER,
-        max_hr INTEGER,
-        bb_max INTEGER,
-        bb_min INTEGER,
-        bb_charged INTEGER,
-        bb_drained INTEGER,
-        stress_avg INTEGER,
-        stress_max INTEGER,
-        steps INTEGER,
-        floors INTEGER,
-        training_readiness INTEGER,
-        spo2_avg REAL,
-        spo2_min INTEGER,
-        respiration_avg REAL,
-        respiration_min REAL,
-        workout_type TEXT,
-        alcohol_logged INTEGER DEFAULT 0,
-        sleep_apnea_flag INTEGER DEFAULT 0,
-        ai_summary TEXT,
-        raw_json TEXT
-    )
-    """)
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS body_comp (
-        date TEXT PRIMARY KEY,
-        weight REAL,
-        body_fat REAL,
-        waist REAL
-    )
-    """)
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS activity_logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        date TEXT NOT NULL,
-        timestamp TEXT NOT NULL,
-        category TEXT NOT NULL,
-        tag TEXT NOT NULL,
-        note TEXT,
-        value REAL
-    )
-    """)
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS anomaly_alerts (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        date TEXT NOT NULL,
-        timestamp TEXT NOT NULL,
-        severity TEXT NOT NULL,
-        alert_type TEXT NOT NULL,
-        message TEXT NOT NULL,
-        metrics_json TEXT,
-        acknowledged INTEGER DEFAULT 0
-    )
-    """)
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS spo2_epochs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        date TEXT NOT NULL,
-        timestamp INTEGER,
-        time_str TEXT NOT NULL,
-        spo2_value INTEGER NOT NULL,
-        respiration_rate REAL,
-        sleep_stage TEXT,
-        epoch_type TEXT DEFAULT 'SLEEP'
-    )
-    """)
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS spo2_drop_events (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        date TEXT NOT NULL,
-        start_time TEXT NOT NULL,
-        nadir_time TEXT NOT NULL,
-        end_time TEXT NOT NULL,
-        duration_seconds INTEGER NOT NULL,
-        baseline_spo2 REAL NOT NULL,
-        nadir_spo2 INTEGER NOT NULL,
-        drop_magnitude REAL NOT NULL,
-        sleep_stage TEXT,
-        respiration_rate REAL,
-        severity TEXT NOT NULL,
-        event_type TEXT DEFAULT 'DESATURATION'
-    )
-    """)
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS hourly_spo2 (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        date TEXT NOT NULL,
-        hour INTEGER NOT NULL,
-        spo2_avg REAL,
-        spo2_min INTEGER,
-        spo2_max INTEGER,
-        sample_count INTEGER DEFAULT 0,
-        drops_below_90 INTEGER DEFAULT 0,
-        drops_below_85 INTEGER DEFAULT 0,
-        hypoxic_minutes REAL DEFAULT 0.0,
-        respiration_avg REAL,
-        dominant_sleep_stage TEXT,
-        lowest_timestamp TEXT,
-        UNIQUE(date, hour)
-    )
-    """)
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS garmin_activities (
-        activity_id INTEGER PRIMARY KEY,
-        date TEXT NOT NULL,
-        start_time TEXT NOT NULL,
-        activity_name TEXT,
-        activity_type TEXT,
-        duration_seconds REAL,
-        elapsed_duration_seconds REAL,
-        distance_meters REAL,
-        calories REAL,
-        avg_hr REAL,
-        max_hr REAL,
-        aerobic_training_effect REAL,
-        anaerobic_training_effect REAL,
-        avg_speed REAL,
-        max_speed REAL,
-        elevation_gain REAL,
-        steps INTEGER,
-        raw_json TEXT
-    )
-    """)
-    conn.commit()
-    conn.close()
+    """
+    Creates the schema if absent. Cheap after the first call: the outcome is
+    cached per process, unlike the SQLite version which re-ran every CREATE
+    TABLE statement on every single query.
+    """
+    global _schema_ready
+    if _schema_ready:
+        return
+    with _conn(ensure_schema=False) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT pg_advisory_xact_lock(%s)", (_SCHEMA_LOCK_KEY,))
+            cursor.execute(_SCHEMA_SQL)
+    _schema_ready = True
+
+
+def _iso_days_ago(days: int) -> str:
+    """
+    SQLite's date('now', '-N days') as an ISO string, so the TEXT date columns
+    can still be compared with >=.
+    """
+    return (date.today() - timedelta(days=int(days))).isoformat()
+
 
 def save_day(date_str: str, raw_data: dict):
     """
@@ -254,7 +382,7 @@ def save_day(date_str: str, raw_data: dict):
         sleep_deep, sleep_light, sleep_rem, sleep_awake, resting_hr, min_hr, max_hr,
         bb_max, bb_min, bb_charged, bb_drained, stress_avg, stress_max, steps, floors,
         training_readiness, spo2_avg, spo2_min, respiration_avg, respiration_min, raw_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     ON CONFLICT(date) DO UPDATE SET
         hrv_last_night = excluded.hrv_last_night,
         hrv_weekly_avg = excluded.hrv_weekly_avg,
@@ -308,16 +436,14 @@ def get_df(limit: int | None = 30):
     Loads daily metrics as a pandas DataFrame.
     When a limit is provided, fetch the newest rows and return them oldest-to-newest.
     """
-    import pandas as pd
     init_db()
-    conn = get_connection()
     if limit is not None:
         query = """
             SELECT * FROM (
                 SELECT * FROM daily_metrics
                 ORDER BY date DESC
-                LIMIT ?
-            )
+                LIMIT %s
+            ) AS recent
             ORDER BY date ASC
         """
         params = (int(limit),)
@@ -327,8 +453,7 @@ def get_df(limit: int | None = 30):
             ORDER BY date ASC
         """
         params = ()
-    df = pd.read_sql_query(query, conn, params=params)
-    conn.close()
+    df = _read_sql(query, params=params)
     return df
 
 def update_custom_field(date_str: str, field_name: str, value):
@@ -342,7 +467,7 @@ def update_custom_field(date_str: str, field_name: str, value):
     
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute(f"UPDATE daily_metrics SET {field_name} = ? WHERE date = ?", (value, date_str))
+    cursor.execute(f"UPDATE daily_metrics SET {field_name} = %s WHERE date = %s", (value, date_str))
     if cursor.rowcount == 0:
         conn.rollback()
         conn.close()
@@ -359,7 +484,7 @@ def save_body_comp(date_str: str, weight: float, body_fat: float, waist: float):
     cursor = conn.cursor()
     cursor.execute("""
     INSERT INTO body_comp (date, weight, body_fat, waist)
-    VALUES (?, ?, ?, ?)
+    VALUES (%s, %s, %s, %s)
     ON CONFLICT(date) DO UPDATE SET
         weight = excluded.weight,
         body_fat = excluded.body_fat,
@@ -372,15 +497,12 @@ def get_body_comp_df(limit: int = 30):
     """
     Loads body composition metrics as a pandas DataFrame.
     """
-    import pandas as pd
     init_db()
-    conn = get_connection()
-    df = pd.read_sql_query(f"""
+    df = _read_sql(f"""
         SELECT * FROM body_comp 
         ORDER BY date ASC 
         LIMIT {limit}
-    """, conn)
-    conn.close()
+    """)
     return df
 
 # ---------- ACTIVITY & HABIT LOGGING ----------
@@ -398,14 +520,15 @@ def log_activity(date_str: str, category: str, tag: str, note: str = "", value: 
     
     cursor.execute("""
     INSERT INTO activity_logs (date, timestamp, category, tag, note, value)
-    VALUES (?, ?, ?, ?, ?, ?)
+    VALUES (%s, %s, %s, %s, %s, %s)
+    RETURNING id
     """, (date_str, now_iso, category, tag, note, value))
-    row_id = cursor.lastrowid
+    row_id = cursor.fetchone()[0]
 
     # If alcohol is logged, ensure daily_metrics flag is updated if row exists
     if tag == "alcohol":
         try:
-            cursor.execute("UPDATE daily_metrics SET alcohol_logged = 1 WHERE date = ?", (date_str,))
+            cursor.execute("UPDATE daily_metrics SET alcohol_logged = 1 WHERE date = %s", (date_str,))
         except Exception:
             pass
 
@@ -418,40 +541,29 @@ def get_activity_logs(date_str: str | None = None, limit: int = 50):
     Fetches activity logs as a list of dicts.
     If date_str is provided, filters by date.
     """
-    init_db()
-    conn = get_connection()
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
     if date_str:
-        cursor.execute("""
-            SELECT * FROM activity_logs 
-            WHERE date = ? 
-            ORDER BY timestamp DESC, id DESC 
-            LIMIT ?
+        return _fetch_dicts("""
+            SELECT * FROM activity_logs
+            WHERE date = %s
+            ORDER BY timestamp DESC, id DESC
+            LIMIT %s
         """, (date_str, limit))
-    else:
-        cursor.execute("""
-            SELECT * FROM activity_logs 
-            ORDER BY date DESC, timestamp DESC, id DESC 
-            LIMIT ?
-        """, (limit,))
-    rows = [dict(row) for row in cursor.fetchall()]
-    conn.close()
-    return rows
+    return _fetch_dicts("""
+        SELECT * FROM activity_logs
+        ORDER BY date DESC, timestamp DESC, id DESC
+        LIMIT %s
+    """, (limit,))
 
 def get_activity_logs_df(limit: int = 100):
     """
     Fetches activity logs as a pandas DataFrame.
     """
-    import pandas as pd
     init_db()
-    conn = get_connection()
-    df = pd.read_sql_query(f"""
+    df = _read_sql(f"""
         SELECT * FROM activity_logs 
         ORDER BY date ASC, timestamp ASC
         LIMIT {limit}
-    """, conn)
-    conn.close()
+    """)
     return df
 
 def delete_activity_log(log_id: int) -> bool:
@@ -459,7 +571,7 @@ def delete_activity_log(log_id: int) -> bool:
     init_db()
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM activity_logs WHERE id = ?", (log_id,))
+    cursor.execute("DELETE FROM activity_logs WHERE id = %s", (log_id,))
     deleted = cursor.rowcount > 0
     conn.commit()
     conn.close()
@@ -479,9 +591,10 @@ def save_anomaly_alert(date_str: str, severity: str, alert_type: str, message: s
     
     cursor.execute("""
     INSERT INTO anomaly_alerts (date, timestamp, severity, alert_type, message, metrics_json, acknowledged)
-    VALUES (?, ?, ?, ?, ?, ?, 0)
+    VALUES (%s, %s, %s, %s, %s, %s, 0)
+    RETURNING id
     """, (date_str, now_iso, severity, alert_type, message, metrics_json))
-    row_id = cursor.lastrowid
+    row_id = cursor.fetchone()[0]
     conn.commit()
     conn.close()
     return row_id
@@ -490,33 +603,25 @@ def get_recent_alerts(limit: int = 20, unacknowledged_only: bool = False):
     """
     Fetches recent anomaly alerts.
     """
-    init_db()
-    conn = get_connection()
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
     if unacknowledged_only:
-        cursor.execute("""
-            SELECT * FROM anomaly_alerts 
-            WHERE acknowledged = 0 
-            ORDER BY timestamp DESC, id DESC 
-            LIMIT ?
+        return _fetch_dicts("""
+            SELECT * FROM anomaly_alerts
+            WHERE acknowledged = 0
+            ORDER BY timestamp DESC, id DESC
+            LIMIT %s
         """, (limit,))
-    else:
-        cursor.execute("""
-            SELECT * FROM anomaly_alerts 
-            ORDER BY timestamp DESC, id DESC 
-            LIMIT ?
-        """, (limit,))
-    rows = [dict(row) for row in cursor.fetchall()]
-    conn.close()
-    return rows
+    return _fetch_dicts("""
+        SELECT * FROM anomaly_alerts
+        ORDER BY timestamp DESC, id DESC
+        LIMIT %s
+    """, (limit,))
 
 def acknowledge_alert(alert_id: int) -> bool:
     """Marks an alert as acknowledged."""
     init_db()
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("UPDATE anomaly_alerts SET acknowledged = 1 WHERE id = ?", (alert_id,))
+    cursor.execute("UPDATE anomaly_alerts SET acknowledged = 1 WHERE id = %s", (alert_id,))
     updated = cursor.rowcount > 0
     conn.commit()
     conn.close()
@@ -674,13 +779,13 @@ def process_and_save_spo2(date_str: str, raw_data: dict):
     cursor = conn.cursor()
     
     # Clean previous records for this date
-    cursor.execute("DELETE FROM spo2_epochs WHERE date = ?", (date_str,))
-    cursor.execute("DELETE FROM spo2_drop_events WHERE date = ?", (date_str,))
-    cursor.execute("DELETE FROM hourly_spo2 WHERE date = ?", (date_str,))
+    cursor.execute("DELETE FROM spo2_epochs WHERE date = %s", (date_str,))
+    cursor.execute("DELETE FROM spo2_drop_events WHERE date = %s", (date_str,))
+    cursor.execute("DELETE FROM hourly_spo2 WHERE date = %s", (date_str,))
     
     cursor.executemany("""
     INSERT INTO spo2_epochs (date, timestamp, time_str, spo2_value, respiration_rate, sleep_stage, epoch_type)
-    VALUES (:date, :timestamp, :time_str, :spo2_value, :respiration_rate, :sleep_stage, :epoch_type)
+    VALUES (%(date)s, %(timestamp)s, %(time_str)s, %(spo2_value)s, %(respiration_rate)s, %(sleep_stage)s, %(epoch_type)s)
     """, epochs)
 
     # Detect exact-moment desaturation events
@@ -691,7 +796,7 @@ def process_and_save_spo2(date_str: str, raw_data: dict):
         INSERT INTO spo2_drop_events (
             date, start_time, nadir_time, end_time, duration_seconds, baseline_spo2,
             nadir_spo2, drop_magnitude, sleep_stage, respiration_rate, severity, event_type
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             ev["date"], ev["start_time"], ev["nadir_time"], ev["end_time"],
             ev["duration_seconds"], ev["baseline_spo2"], ev["nadir_spo2"],
@@ -739,7 +844,7 @@ def process_and_save_spo2(date_str: str, raw_data: dict):
                 date, hour, spo2_avg, spo2_min, spo2_max, sample_count,
                 drops_below_90, drops_below_85, hypoxic_minutes, respiration_avg,
                 dominant_sleep_stage, lowest_timestamp
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT(date, hour) DO UPDATE SET
                 spo2_avg = excluded.spo2_avg,
                 spo2_min = excluded.spo2_min,
@@ -765,15 +870,12 @@ def get_spo2_epochs_df(date_str: str):
     """
     Returns pandas DataFrame of all high-resolution SpO2 epochs for the given date.
     """
-    import pandas as pd
     init_db()
-    conn = get_connection()
-    df = pd.read_sql_query("""
+    df = _read_sql("""
         SELECT * FROM spo2_epochs 
-        WHERE date = ? 
+        WHERE date = %s 
         ORDER BY timestamp ASC, id ASC
-    """, conn, params=(date_str,))
-    conn.close()
+    """, params=(date_str,))
     return df
 
 
@@ -781,33 +883,23 @@ def get_spo2_drop_events(date_str: str) -> list[dict]:
     """
     Returns list of exact-moment desaturation drop events for a specific date.
     """
-    init_db()
-    conn = get_connection()
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT * FROM spo2_drop_events 
-        WHERE date = ? 
+    return _fetch_dicts("""
+        SELECT * FROM spo2_drop_events
+        WHERE date = %s
         ORDER BY start_time ASC, id ASC
     """, (date_str,))
-    rows = [dict(r) for r in cursor.fetchall()]
-    conn.close()
-    return rows
 
 
 def get_hourly_spo2_df(date_str: str):
     """
     Returns 24-hour SpO2 breakdown DataFrame for a date.
     """
-    import pandas as pd
     init_db()
-    conn = get_connection()
-    df = pd.read_sql_query("""
+    df = _read_sql("""
         SELECT * FROM hourly_spo2 
-        WHERE date = ? 
+        WHERE date = %s 
         ORDER BY hour ASC
-    """, conn, params=(date_str,))
-    conn.close()
+    """, params=(date_str,))
     return df
 
 
@@ -815,21 +907,18 @@ def get_multi_day_hourly_spo2_df(days: int = None):
     """
     Returns multi-day hourly SpO2 DataFrame for heatmap visualization across past N days (or all if None).
     """
-    import pandas as pd
     init_db()
-    conn = get_connection()
     if days and days > 0:
-        df = pd.read_sql_query("""
+        df = _read_sql("""
             SELECT * FROM hourly_spo2 
-            WHERE date >= date('now', '-' || ? || ' days')
+            WHERE date >= %s
             ORDER BY date ASC, hour ASC
-        """, conn, params=(days,))
+        """, params=(_iso_days_ago(days),))
     else:
-        df = pd.read_sql_query("""
+        df = _read_sql("""
             SELECT * FROM hourly_spo2 
             ORDER BY date ASC, hour ASC
-        """, conn)
-    conn.close()
+        """)
     return df
 
 
@@ -837,21 +926,18 @@ def get_all_spo2_events_df(days: int = None):
     """
     Returns DataFrame of all exact-moment desaturation events across past N days (or all if None).
     """
-    import pandas as pd
     init_db()
-    conn = get_connection()
     if days and days > 0:
-        df = pd.read_sql_query("""
+        df = _read_sql("""
             SELECT * FROM spo2_drop_events 
-            WHERE date >= date('now', '-' || ? || ' days')
+            WHERE date >= %s
             ORDER BY date DESC, start_time DESC
-        """, conn, params=(days,))
+        """, params=(_iso_days_ago(days),))
     else:
-        df = pd.read_sql_query("""
+        df = _read_sql("""
             SELECT * FROM spo2_drop_events 
             ORDER BY date DESC, start_time DESC
-        """, conn)
-    conn.close()
+        """)
     return df
 
 
@@ -921,7 +1007,7 @@ def process_and_save_activities(date_str: str, raw_data: dict):
             calories, avg_hr, max_hr, aerobic_training_effect,
             anaerobic_training_effect, avg_speed, max_speed, elevation_gain,
             steps, raw_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT(activity_id) DO UPDATE SET
             date = excluded.date,
             start_time = excluded.start_time,
@@ -962,8 +1048,8 @@ def process_and_save_activities(date_str: str, raw_data: dict):
         full_workout_summary = ", ".join(summary_labels)
         cursor.execute("""
             UPDATE daily_metrics
-            SET workout_type = ?
-            WHERE date = ? AND (workout_type IS NULL OR workout_type = '' OR workout_type LIKE '%Auto%')
+            SET workout_type = %s
+            WHERE date = %s AND (workout_type IS NULL OR workout_type = '' OR workout_type LIKE '%%Auto%%')
         """, (full_workout_summary, date_str))
 
     conn.commit()
@@ -974,24 +1060,21 @@ def get_activities_df(days: int = None, limit: int = None):
     """
     Returns DataFrame of recorded Garmin activities across past N days (or all if None).
     """
-    import pandas as pd
     init_db()
-    conn = get_connection()
     query = "SELECT * FROM garmin_activities"
     params = []
 
     if days and days > 0:
-        query += " WHERE date >= date('now', '-' || ? || ' days')"
-        params.append(days)
+        query += " WHERE date >= %s"
+        params.append(_iso_days_ago(days))
 
     query += " ORDER BY start_time DESC"
 
     if limit and limit > 0:
-        query += " LIMIT ?"
+        query += " LIMIT %s"
         params.append(limit)
 
-    df = pd.read_sql_query(query, conn, params=params)
-    conn.close()
+    df = _read_sql(query, params=params)
     return df
 
 
@@ -1010,7 +1093,7 @@ def backfill_spo2_epochs_if_needed():
         # Check if already has epochs
         conn = get_connection()
         c = conn.cursor()
-        c.execute("SELECT COUNT(*) FROM spo2_epochs WHERE date = ?", (date_str,))
+        c.execute("SELECT COUNT(*) FROM spo2_epochs WHERE date = %s", (date_str,))
         count = c.fetchone()[0]
         conn.close()
         
@@ -1044,5 +1127,7 @@ if __name__ == "__main__":
     init_db()
     backfill_spo2_epochs_if_needed()
     backfill_activities_if_needed()
-    print("Database initialized, SpO2 & activities backfilled at:", DB_PATH)
+    # Never print the DSN itself: it carries the password.
+    host = DATABASE_URL.split("@")[-1] if "@" in DATABASE_URL else "(unset)"
+    print("Database initialized, SpO2 & activities backfilled at:", host)
 

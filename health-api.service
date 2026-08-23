@@ -1,17 +1,23 @@
 [Unit]
-Description=Datasette Health Data API
+Description=Datasette Health Data API (PostgreSQL)
 After=network.target
+ConditionPathExists=/root/garmin-health/.env
 
 [Service]
 Type=simple
 WorkingDirectory=/root/garmin-health
-ExecStart=/root/garmin-health/venv/bin/datasette serve /root/garmin-health/health.db \
+EnvironmentFile=/root/garmin-health/.env
+# Requires the `datasette-postgres` plugin (pip install datasette-postgres) in
+# the same venv. Datasette detects the postgresql:// scheme and proxies
+# queries to Postgres instead of opening a SQLite file. Wrapped in `sh -c` so
+# $DATABASE_URL from the EnvironmentFile actually expands.
+ExecStart=/bin/sh -c '/root/garmin-health/venv/bin/datasette serve "$DATABASE_URL" \
   --port 8094 \
   --host 127.0.0.1 \
   --metadata /root/garmin-health/metadata.yaml \
   --setting allow_download off \
   --setting default_page_size 50 \
-  --setting max_returned_rows 5000
+  --setting max_returned_rows 5000'
 Restart=always
 RestartSec=5
 User=root
