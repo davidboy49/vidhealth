@@ -6,7 +6,7 @@ Monitors Garmin biometric metrics for:
 - Resting Heart Rate spikes
 - Severe HRV Autonomic crashes
 - Acute Recovery Debt & Sleep architecture disruption
-Dispatches proactive Telegram alerts and saves records to SQLite DB.
+Dispatches proactive Telegram alerts and saves records to the database.
 """
 
 import os
