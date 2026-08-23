@@ -269,7 +269,7 @@ def backfill(days: int = 30, force: bool = False) -> dict:
     - Checks SQLite database and skips already completed days (unless force=True).
     - Always re-syncs the most recent 3 days for finalized sleep/SpO2 data.
     - Implements 1-second rate-limiting delays to prevent Garmin 429 errors.
-    - Ingests exact-moment SpO2 desaturation epochs into health.db.
+    - Ingests exact-moment SpO2 desaturation epochs into the health database.
     """
     api = get_api()
     today = date.today()
@@ -289,7 +289,7 @@ def backfill(days: int = 30, force: bool = False) -> dict:
             try:
                 conn = db.get_connection()
                 cursor = conn.cursor()
-                cursor.execute("SELECT date FROM daily_metrics WHERE date = ?", (ds,))
+                cursor.execute("SELECT date FROM daily_metrics WHERE date = %s", (ds,))
                 row = cursor.fetchone()
                 conn.close()
                 if row:
