@@ -4,6 +4,7 @@ import numpy as np
 from pathlib import Path
 from datetime import datetime, date, timedelta
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import sys
 import math
 
@@ -44,6 +45,29 @@ else:
     accent_color = "#e4e4e7"       # zinc-200
     plotly_template = "plotly_white"
     grid_color = "#f4f4f5"
+
+# ---------- STATUS & CHART COLOR CONSTANTS ----------
+# Single source of truth for the red/amber/green status triad, used for both
+# Python chart args and interpolated into the HTML/CSS templates below.
+# Previously these were ~80 copy-pasted hex literals scattered through the file.
+STATUS_GOOD = "#10b981"       # emerald-500
+STATUS_WARNING = "#f59e0b"    # amber-500
+STATUS_CRITICAL = "#ef4444"   # red-500
+
+# Sleep-stage ramp (dark -> light = deep -> awake). Chosen per-theme so the
+# darkest step still has contrast against that theme's own background —
+# the light-mode indigo-950 was nearly invisible against the dark-mode
+# near-black background when reused unchanged.
+if st.session_state.theme == "dark":
+    SLEEP_DEEP = "#4338ca"     # indigo-700
+    SLEEP_REM = "#818cf8"      # indigo-400
+    SLEEP_LIGHT = "#c7d2fe"    # indigo-200
+    SLEEP_AWAKE = "#52525b"    # zinc-600
+else:
+    SLEEP_DEEP = "#1e1b4b"     # indigo-950
+    SLEEP_REM = "#4f46e5"      # indigo-600
+    SLEEP_LIGHT = "#818cf8"    # indigo-400
+    SLEEP_AWAKE = "#e4e4e7"    # zinc-200
 
 # Inject Stylesheet at the very beginning
 st.markdown(f"""
@@ -248,6 +272,17 @@ st.markdown(f"""
         from {{ opacity: 0; transform: translateY(6px); }}
         to {{ opacity: 1; transform: translateY(0); }}
     }}
+
+    /* Mobile: let every st.columns() row wrap instead of squishing columns
+       (e.g. the Today tab's 5-column stat-tile grid) down to unreadable widths. */
+    @media (max-width: 640px) {{
+        div[data-testid="stHorizontalBlock"] {{
+            flex-wrap: wrap !important;
+        }}
+        div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {{
+            min-width: 100% !important;
+        }}
+    }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -357,13 +392,20 @@ latest_date = latest_timestamp.strftime("%Y-%m-%d")
 loader.empty()
 
 # ---------- SPARKLINE PLOTTER HELPER ----------
-def make_sparkline(series, color):
+def make_sparkline(series, color, dates=None):
+    """
+    A 30px trend line embedded in a stat tile. Kept markerless to stay
+    compact, but hover is enabled (date + value) rather than fully disabled —
+    a sparkline is still a plot, not a bare stat tile with nothing to show.
+    """
     fig = go.Figure()
+    hover_text = [f"{d}: {v:.1f}" for d, v in zip(dates, series)] if dates is not None else None
     fig.add_trace(go.Scatter(
         x=list(range(len(series))), y=series,
         mode="lines",
         line=dict(color=color, width=2),
-        hoverinfo="none"
+        hoverinfo="text" if hover_text else "y",
+        text=hover_text,
     ))
     fig.update_layout(
         template=None,
@@ -371,6 +413,7 @@ def make_sparkline(series, color):
         yaxis=dict(visible=False),
         plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
         margin=dict(l=0, r=0, t=0, b=0),
+        hoverlabel=dict(bgcolor=bg_card, font_size=11, font_color=text_primary, bordercolor=border),
         height=30,
         showlegend=False
     )
@@ -426,7 +469,7 @@ with tab_today:
     active_anomalies = anomaly_detector.scan_daily_anomalies()
     if active_anomalies:
         for a in active_anomalies:
-            alert_border = "#ef4444" if a["severity"] == "CRITICAL" else "#f59e0b"
+            alert_border = STATUS_CRITICAL if a["severity"] == "CRITICAL" else STATUS_WARNING
             st.markdown(f"""
             <div style="background-color: var(--card); border: 1px solid var(--border); border-left: 4px solid {alert_border}; border-radius: 8px; padding: 14px 18px; margin-bottom: 16px; box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);">
                 <div style="font-size: 0.875rem; font-weight: 700; color: {alert_border}; display: flex; align-items: center; gap: 8px;">
@@ -442,13 +485,13 @@ with tab_today:
     readiness = numeric_value(latest_df.get("training_readiness"))
     if readiness is not None:
         if readiness >= 80:
-            border_indicator = "#10b981" # emerald-500
+            border_indicator = STATUS_GOOD # emerald-500
             qualifier = "Ready for high-intensity training"
         elif readiness >= 50:
-            border_indicator = "#f59e0b" # amber-500
+            border_indicator = STATUS_WARNING # amber-500
             qualifier = "Moderate strain recommended"
         else:
-            border_indicator = "#ef4444" # red-500
+            border_indicator = STATUS_CRITICAL # red-500
             qualifier = "Active recovery or rest recommended"
             
         st.markdown(f"""
@@ -478,8 +521,9 @@ with tab_today:
         """, unsafe_allow_html=True)
         # 7-day sparkline
         hrv_series = df["hrv_last_night"].tail(7).bfill().ffill().tolist()
+        hrv_dates = df["date"].tail(7).tolist()
         if len(hrv_series) > 1:
-            st.plotly_chart(make_sparkline(hrv_series, "#6366f1"), config={'displayModeBar': False}, use_container_width=True)
+            st.plotly_chart(make_sparkline(hrv_series, "#6366f1", dates=hrv_dates), config={'displayModeBar': False}, use_container_width=True)
 
     with col2:
         sleep_val = numeric_value(latest_df.get("sleep_score"))
@@ -495,8 +539,9 @@ with tab_today:
         """, unsafe_allow_html=True)
         # 7-day sparkline
         sleep_series = df["sleep_score"].tail(7).bfill().ffill().tolist()
+        sleep_dates = df["date"].tail(7).tolist()
         if len(sleep_series) > 1:
-            st.plotly_chart(make_sparkline(sleep_series, "#8b5cf6"), config={'displayModeBar': False}, use_container_width=True)
+            st.plotly_chart(make_sparkline(sleep_series, "#8b5cf6", dates=sleep_dates), config={'displayModeBar': False}, use_container_width=True)
 
     with col3:
         hr_val = numeric_value(latest_df.get("resting_hr"))
@@ -512,8 +557,9 @@ with tab_today:
         """, unsafe_allow_html=True)
         # 7-day sparkline
         hrv_avg_series = df["resting_hr"].tail(7).bfill().ffill().tolist()
+        rhr_dates = df["date"].tail(7).tolist()
         if len(hrv_avg_series) > 1:
-            st.plotly_chart(make_sparkline(hrv_avg_series, "#ef4444"), config={'displayModeBar': False}, use_container_width=True)
+            st.plotly_chart(make_sparkline(hrv_avg_series, STATUS_CRITICAL, dates=rhr_dates), config={'displayModeBar': False}, use_container_width=True)
 
     with col4:
         stress_val = numeric_value(latest_df.get("stress_avg"))
@@ -529,8 +575,9 @@ with tab_today:
         """, unsafe_allow_html=True)
         # 7-day sparkline
         stress_series = df["stress_avg"].tail(7).bfill().ffill().tolist()
+        stress_dates = df["date"].tail(7).tolist()
         if len(stress_series) > 1:
-            st.plotly_chart(make_sparkline(stress_series, "#f59e0b"), config={'displayModeBar': False}, use_container_width=True)
+            st.plotly_chart(make_sparkline(stress_series, STATUS_WARNING, dates=stress_dates), config={'displayModeBar': False}, use_container_width=True)
 
     with col5:
         bb_val = numeric_value(latest_df.get("bb_min"))
@@ -546,8 +593,9 @@ with tab_today:
         """, unsafe_allow_html=True)
         # 7-day sparkline
         bb_series = df["bb_min"].tail(7).bfill().ffill().tolist()
+        bb_dates = df["date"].tail(7).tolist()
         if len(bb_series) > 1:
-            st.plotly_chart(make_sparkline(bb_series, "#10b981"), config={'displayModeBar': False}, use_container_width=True)
+            st.plotly_chart(make_sparkline(bb_series, STATUS_GOOD, dates=bb_dates), config={'displayModeBar': False}, use_container_width=True)
 
     st.markdown("<div style='margin-bottom: 24px;'></div>", unsafe_allow_html=True)
 
@@ -671,12 +719,12 @@ with tab_today:
         <div class="shadcn-card" style="padding: 18px; border-left: 4px solid var(--border);">
             <div style="font-size: 0.75rem; color: var(--muted-foreground); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 8px;">Weekly Strain vs Recovery Balance</div>
             <div style="display: flex; height: 10px; border-radius: 5px; overflow: hidden; background-color: var(--muted); border: 1px solid var(--border);">
-                <div style="width: {rec_pct:.1f}%; background-color: #10b981;"></div>
-                <div style="width: {strain_pct:.1f}%; background-color: #ef4444;"></div>
+                <div style="width: {rec_pct:.1f}%; background-color: {STATUS_GOOD};"></div>
+                <div style="width: {strain_pct:.1f}%; background-color: {STATUS_CRITICAL};"></div>
             </div>
             <div style="display: flex; justify-content: space-between; font-size: 0.75rem; margin-top: 6px; font-weight: 500;">
-                <span style="color: #10b981;">Recovery ({rec_pct:.0f}%)</span>
-                <span style="color: #ef4444;">Strain ({strain_pct:.0f}%)</span>
+                <span style="color: {STATUS_GOOD};">Recovery ({rec_pct:.0f}%)</span>
+                <span style="color: {STATUS_CRITICAL};">Strain ({strain_pct:.0f}%)</span>
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -907,27 +955,27 @@ with tab_trends:
         if avg_rhr is not None:
             if avg_rhr < 60:
                 rhr_status = "Athletic/low"
-                rhr_color = "#10b981"
+                rhr_color = STATUS_GOOD
             elif avg_rhr <= 100:
                 rhr_status = "Within adult range"
-                rhr_color = "#10b981"
+                rhr_color = STATUS_GOOD
             else:
                 rhr_status = "Above adult range"
-                rhr_color = "#ef4444"
+                rhr_color = STATUS_CRITICAL
             reference_items.append(("Resting HR", rhr_status, "Adult reference: 60-100 bpm; trained athletes may be lower.", rhr_color))
         if avg_sleep_hours is not None:
             sleep_status = "On target" if avg_sleep_hours >= 7 else "Below 7h target"
-            sleep_color = "#10b981" if avg_sleep_hours >= 7 else "#f59e0b"
+            sleep_color = STATUS_GOOD if avg_sleep_hours >= 7 else STATUS_WARNING
             reference_items.append(("Sleep Duration", sleep_status, f"Average: {avg_sleep_hours:.1f}h. Adult guidance commonly starts at 7h/night.", sleep_color))
         spo2_avg = metric_mean(trend_df, "spo2_avg")
         if spo2_avg is not None:
             spo2_status = "Typical" if spo2_avg >= 95 else "Watch trend"
-            spo2_color = "#10b981" if spo2_avg >= 95 else "#f59e0b"
+            spo2_color = STATUS_GOOD if spo2_avg >= 95 else STATUS_WARNING
             reference_items.append(("SpO2", spo2_status, f"Average: {spo2_avg:.1f}%. Typical pulse ox readings are often 95-100%.", spo2_color))
         resp_avg = metric_mean(trend_df, "respiration_avg")
         if resp_avg is not None:
             resp_status = "Typical" if 12 <= resp_avg <= 20 else "Outside common band"
-            resp_color = "#10b981" if 12 <= resp_avg <= 20 else "#f59e0b"
+            resp_color = STATUS_GOOD if 12 <= resp_avg <= 20 else STATUS_WARNING
             reference_items.append(("Respiration", resp_status, f"Average: {resp_avg:.1f}/min. Common adult resting band: 12-20/min.", resp_color))
 
         if reference_items:
@@ -944,13 +992,13 @@ with tab_trends:
             fig_improve.add_trace(go.Scatter(
                 x=derived_df["date"], y=derived_df["recovery_index"],
                 mode="lines+markers", name="Recovery Index",
-                line=dict(color="#2563eb", width=3), marker=dict(size=5)
+                line=dict(color="#2563eb", width=3), marker=dict(size=8)
             ))
             if "training_readiness" in derived_df.columns and derived_df["training_readiness"].notna().any():
                 fig_improve.add_trace(go.Scatter(
                     x=derived_df["date"], y=derived_df["training_readiness"],
                     mode="lines", name="Training Readiness",
-                    line=dict(color="#10b981", width=2, dash="dot")
+                    line=dict(color=STATUS_GOOD, width=2, dash="dot")
                 ))
             fig_improve.add_hrect(y0=75, y1=100, fillcolor="rgba(16,185,129,0.08)", line_width=0)
             fig_improve.add_hrect(y0=0, y1=50, fillcolor="rgba(239,68,68,0.06)", line_width=0)
@@ -969,7 +1017,7 @@ with tab_trends:
         col_base, col_load = st.columns(2)
         with col_base:
             if "hrv_delta" in derived_df.columns and derived_df["hrv_delta"].notna().any():
-                hrv_colors = ["#10b981" if val >= 0 else "#ef4444" for val in derived_df["hrv_delta"].fillna(0)]
+                hrv_colors = [STATUS_GOOD if val >= 0 else STATUS_CRITICAL for val in derived_df["hrv_delta"].fillna(0)]
                 fig_hrv_delta = go.Figure()
                 fig_hrv_delta.add_trace(go.Bar(
                     x=derived_df["date"], y=derived_df["hrv_delta"],
@@ -993,7 +1041,7 @@ with tab_trends:
                 fig_load.add_trace(go.Scatter(
                     x=trend_df["date"], y=trend_df["training_readiness"],
                     mode="lines+markers", name="Readiness",
-                    line=dict(color="#10b981", width=2), marker=dict(size=4)
+                    line=dict(color=STATUS_GOOD, width=2), marker=dict(size=8)
                 ))
                 if "stress_avg" in trend_df.columns and trend_df["stress_avg"].notna().any():
                     fig_load.add_trace(go.Bar(
@@ -1039,7 +1087,7 @@ with tab_trends:
                 fig_balance_pie = go.Figure(data=[go.Pie(
                     labels=["Recovery", "Strain"], values=[recovery_index, strain_index],
                     hole=0.58,
-                    marker=dict(colors=["#10b981", "#ef4444"]),
+                    marker=dict(colors=[STATUS_GOOD, STATUS_CRITICAL]),
                     textinfo="label+percent"
                 )])
                 fig_balance_pie.update_layout(
@@ -1060,7 +1108,7 @@ with tab_trends:
                 fig_days_pie = go.Figure(data=[go.Pie(
                     labels=["Ready", "Moderate", "Recovery Focus"], values=[ready_days, moderate_days, low_days],
                     hole=0.52,
-                    marker=dict(colors=["#10b981", "#f59e0b", "#ef4444"]),
+                    marker=dict(colors=[STATUS_GOOD, STATUS_WARNING, STATUS_CRITICAL]),
                     textinfo="label+percent"
                 )])
                 fig_days_pie.update_layout(
@@ -1073,35 +1121,36 @@ with tab_trends:
                 )
                 st.plotly_chart(fig_days_pie, use_container_width=True)
 
-        # Chart 1: HRV vs Resting HR with adult reference band for resting HR.
-        fig_hr = go.Figure()
+        # Chart 1: HRV and Resting HR as small multiples sharing an x-axis.
+        # Previously a dual-axis chart — two independent y-scales invite
+        # misreading a coincidental line-crossing as a correlation.
+        fig_hr = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08)
         if "hrv_last_night" in trend_df.columns and trend_df["hrv_last_night"].notna().any():
             fig_hr.add_trace(go.Scatter(
                 x=trend_df["date"], y=trend_df["hrv_last_night"],
                 mode="lines+markers", name="HRV (ms)",
                 line=dict(color="#6366f1", width=2),
-                marker=dict(size=4)
-            ))
+                marker=dict(size=8)
+            ), row=1, col=1)
         if "resting_hr" in trend_df.columns and trend_df["resting_hr"].notna().any():
             fig_hr.add_trace(go.Scatter(
                 x=trend_df["date"], y=trend_df["resting_hr"],
                 mode="lines+markers", name="Resting HR (bpm)",
-                line=dict(color="#ef4444", width=2),
-                marker=dict(size=4),
-                yaxis="y2"
-            ))
-            fig_hr.add_hrect(y0=60, y1=100, yref="y2", fillcolor="rgba(16,185,129,0.06)", line_width=0)
+                line=dict(color=STATUS_CRITICAL, width=2),
+                marker=dict(size=8)
+            ), row=2, col=1)
+            fig_hr.add_hrect(y0=60, y1=100, row=2, col=1, fillcolor="rgba(16,185,129,0.06)", line_width=0)
         fig_hr.update_layout(
             template=plotly_template,
             title="HRV and Resting Heart Rate",
             hovermode="x unified",
-            yaxis=dict(title="HRV (ms)", side="left", gridcolor=grid_color),
-            yaxis2=dict(title="Resting HR (bpm)", overlaying="y", side="right", showgrid=False),
             plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-            height=300,
+            height=420,
             margin=dict(l=40, r=40, t=40, b=30),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
         )
+        fig_hr.update_yaxes(title_text="HRV (ms)", gridcolor=grid_color, row=1, col=1)
+        fig_hr.update_yaxes(title_text="Resting HR (bpm)", gridcolor=grid_color, row=2, col=1)
         st.plotly_chart(fig_hr, use_container_width=True)
 
         # Chart 2: Sleep Architecture Breakdown (Stacked Bar)
@@ -1113,12 +1162,15 @@ with tab_trends:
             awake_hrs = trend_df["sleep_awake"] / 3600.0
             total_sleep_hrs = trend_df["sleep_duration"] / 3600.0 if "sleep_duration" in trend_df.columns else deep_hrs + rem_hrs + light_hrs
 
-            fig_sleep_arch.add_trace(go.Bar(x=trend_df["date"], y=deep_hrs, name="Deep Sleep", marker_color="#1e1b4b"))
-            fig_sleep_arch.add_trace(go.Bar(x=trend_df["date"], y=rem_hrs, name="REM Sleep", marker_color="#4f46e5"))
-            fig_sleep_arch.add_trace(go.Bar(x=trend_df["date"], y=light_hrs, name="Light Sleep", marker_color="#818cf8"))
-            fig_sleep_arch.add_trace(go.Bar(x=trend_df["date"], y=awake_hrs, name="Awake Time", marker_color="#e4e4e7"))
-            fig_sleep_arch.add_trace(go.Scatter(x=trend_df["date"], y=total_sleep_hrs.rolling(7, min_periods=2).mean(), name="7d Avg Total", line=dict(color="#111827", width=2), mode="lines"))
-            fig_sleep_arch.add_hline(y=7, line_dash="dash", line_color="#10b981")
+            # marker.line gives each stacked segment a surface-color border so
+            # adjacent similar-toned segments (REM/Light) don't blur together.
+            _seg_line = dict(color=bg_base, width=2)
+            fig_sleep_arch.add_trace(go.Bar(x=trend_df["date"], y=deep_hrs, name="Deep Sleep", marker=dict(color=SLEEP_DEEP, line=_seg_line)))
+            fig_sleep_arch.add_trace(go.Bar(x=trend_df["date"], y=rem_hrs, name="REM Sleep", marker=dict(color=SLEEP_REM, line=_seg_line)))
+            fig_sleep_arch.add_trace(go.Bar(x=trend_df["date"], y=light_hrs, name="Light Sleep", marker=dict(color=SLEEP_LIGHT, line=_seg_line)))
+            fig_sleep_arch.add_trace(go.Bar(x=trend_df["date"], y=awake_hrs, name="Awake Time", marker=dict(color=SLEEP_AWAKE, line=_seg_line)))
+            fig_sleep_arch.add_trace(go.Scatter(x=trend_df["date"], y=total_sleep_hrs.rolling(7, min_periods=2).mean(), name="7d Avg Total", line=dict(color=text_primary, width=2), mode="lines"))
+            fig_sleep_arch.add_hline(y=7, line_dash="dash", line_color=STATUS_GOOD)
 
             fig_sleep_arch.update_layout(
                 template=plotly_template,
@@ -1159,7 +1211,7 @@ with tab_trends:
             fig_band.add_trace(go.Scatter(
                 x=df_bands["date"], y=df_bands["hrv_numeric"],
                 mode="lines+markers", line=dict(color="#4f46e5", width=2.5),
-                marker=dict(size=6, color="#4f46e5"),
+                marker=dict(size=8, color="#4f46e5"),
                 name="Nightly HRV"
             ))
             fig_band.update_layout(
@@ -1174,35 +1226,8 @@ with tab_trends:
             )
             st.plotly_chart(fig_band, use_container_width=True)
 
-        # Chart 2: HRV vs Resting HR with adult reference band for resting HR.
-        fig_hr = go.Figure()
-        if "hrv_last_night" in trend_df.columns and trend_df["hrv_last_night"].notna().any():
-            fig_hr.add_trace(go.Scatter(
-                x=trend_df["date"], y=trend_df["hrv_last_night"],
-                mode="lines+markers", name="HRV (ms)",
-                line=dict(color="#6366f1", width=2),
-                marker=dict(size=4)
-            ))
-        if "resting_hr" in trend_df.columns and trend_df["resting_hr"].notna().any():
-            fig_hr.add_trace(go.Scatter(
-                x=trend_df["date"], y=trend_df["resting_hr"],
-                mode="lines+markers", name="Resting HR (bpm)",
-                line=dict(color="#ef4444", width=2),
-                marker=dict(size=4), yaxis="y2"
-            ))
-        fig_hr.add_hrect(y0=60, y1=100, yref="y2", fillcolor="rgba(16,185,129,0.06)", line_width=0)
-        fig_hr.update_layout(
-            template=plotly_template,
-            title="HRV vs Resting Heart Rate",
-            hovermode="x unified",
-            yaxis=dict(title="HRV (ms)", side="left", gridcolor=grid_color),
-            yaxis2=dict(title="Resting HR (bpm)", side="right", overlaying="y", range=[40, 100]),
-            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-            height=300,
-            margin=dict(l=40, r=40, t=40, b=30),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-        )
-        st.plotly_chart(fig_hr, use_container_width=True)
+        # Note: an "HRV vs Resting HR" chart used to be duplicated here — it's
+        # already covered above by the HRV/RHR small-multiple chart.
 
         # Stress Load and Body Battery
         fig_stress = go.Figure()
@@ -1210,15 +1235,15 @@ with tab_trends:
             fig_stress.add_trace(go.Scatter(
                 x=trend_df["date"], y=trend_df["stress_avg"],
                 mode="lines+markers", name="Avg Stress",
-                line=dict(color="#f59e0b", width=2),
-                marker=dict(size=4)
+                line=dict(color=STATUS_WARNING, width=2),
+                marker=dict(size=8)
             ))
         if "bb_min" in trend_df.columns and trend_df["bb_min"].notna().any():
             fig_stress.add_trace(go.Scatter(
                 x=trend_df["date"], y=trend_df["bb_min"],
                 mode="lines+markers", name="Body Battery Min",
-                line=dict(color="#10b981", width=2),
-                marker=dict(size=4)
+                line=dict(color=STATUS_GOOD, width=2),
+                marker=dict(size=8)
             ))
         fig_stress.update_layout(
             template=plotly_template,
@@ -1232,41 +1257,44 @@ with tab_trends:
         )
         st.plotly_chart(fig_stress, use_container_width=True)
 
-        # Pulse Ox & Respiration Chart
+        # Pulse Ox & Respiration Chart — small multiples (shared x-axis)
+        # instead of a dual-axis chart, since SpO2 % and breaths/min are
+        # different units that shouldn't share a scale.
         if "spo2_avg" in trend_df.columns and trend_df["spo2_avg"].notna().any():
-            fig_spo2 = go.Figure()
-            fig_spo2.add_hrect(y0=95, y1=100, fillcolor="rgba(16,185,129,0.08)", line_width=0)
+            fig_spo2 = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08,
+                                      row_heights=[0.6, 0.4])
+            fig_spo2.add_hrect(y0=95, y1=100, row=1, col=1, fillcolor="rgba(16,185,129,0.08)", line_width=0)
             fig_spo2.add_trace(go.Scatter(
                 x=trend_df["date"], y=trend_df["spo2_avg"],
                 mode="lines+markers", name="Pulse Ox (SpO2 %)",
                 line=dict(color="#06b6d4", width=2),
-                marker=dict(size=4)
-            ))
+                marker=dict(size=8)
+            ), row=1, col=1)
             if "spo2_min" in trend_df.columns and trend_df["spo2_min"].notna().any():
                 fig_spo2.add_trace(go.Scatter(
                     x=trend_df["date"], y=trend_df["spo2_min"],
                     mode="lines+markers", name="SpO2 Min",
                     line=dict(color="#f43f5e", width=1.5, dash="dot"),
-                    marker=dict(size=3)
-                ))
+                    marker=dict(size=8)
+                ), row=1, col=1)
             if "respiration_avg" in trend_df.columns and trend_df["respiration_avg"].notna().any():
                 fig_spo2.add_trace(go.Scatter(
                     x=trend_df["date"], y=trend_df["respiration_avg"],
                     mode="lines", name="Respiration Rate",
                     line=dict(color="#a855f7", width=1.5, dash="dash"),
-                    yaxis="y2"
-                ))
+                    marker=dict(size=8)
+                ), row=2, col=1)
             fig_spo2.update_layout(
                 template=plotly_template,
                 title="Pulse Ox (SpO2) and Respiration Trends",
                 hovermode="x unified",
-                yaxis=dict(title="SpO2 (%)", side="left", range=[80, 100], gridcolor=grid_color),
-                yaxis2=dict(title="Breaths/min", side="right", overlaying="y", range=[8, 25]),
                 plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                height=280,
+                height=380,
                 margin=dict(l=40, r=40, t=40, b=30),
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
             )
+            fig_spo2.update_yaxes(title_text="SpO2 (%)", range=[80, 100], gridcolor=grid_color, row=1, col=1)
+            fig_spo2.update_yaxes(title_text="Breaths/min", range=[8, 25], gridcolor=grid_color, row=2, col=1)
             st.plotly_chart(fig_spo2, use_container_width=True)
 
         # Correlation and Habit Impact Analysis
@@ -1305,21 +1333,21 @@ with tab_trends:
             if habit_res.get("alcohol_impact"):
                 alc = habit_res["alcohol_impact"]
                 st.markdown(f"""
-                <div class="shadcn-card" style="padding: 20px; border-left: 4px solid #f59e0b; margin-top: 40px;">
+                <div class="shadcn-card" style="padding: 20px; border-left: 4px solid {STATUS_WARNING}; margin-top: 40px;">
                     <div style="font-size: 0.875rem; font-weight: 700; color: var(--foreground); margin-bottom: 8px;">🍷 Alcohol & Habit Recovery Delta</div>
                     <div style="font-size: 0.75rem; color: var(--muted-foreground); margin-bottom: 12px;">Comparing {habit_res['alcohol_days']} habit days vs {habit_res['clean_days']} baseline clean days:</div>
                     <div style="display: flex; flex-direction: column; gap: 8px;">
                         <div style="display: flex; justify-content: space-between; font-size: 0.875rem;">
                             <span>HRV Delta:</span>
-                            <strong style="color: {'#ef4444' if alc['delta_hrv'] and alc['delta_hrv'] < 0 else '#10b981'};">{alc['delta_hrv']:+.1f} ms</strong>
+                            <strong style="color: {STATUS_CRITICAL if alc['delta_hrv'] and alc['delta_hrv'] < 0 else STATUS_GOOD};">{alc['delta_hrv']:+.1f} ms</strong>
                         </div>
                         <div style="display: flex; justify-content: space-between; font-size: 0.875rem;">
                             <span>Resting HR Delta:</span>
-                            <strong style="color: {'#ef4444' if alc['delta_rhr'] and alc['delta_rhr'] > 0 else '#10b981'};">{alc['delta_rhr']:+.1f} bpm</strong>
+                            <strong style="color: {STATUS_CRITICAL if alc['delta_rhr'] and alc['delta_rhr'] > 0 else STATUS_GOOD};">{alc['delta_rhr']:+.1f} bpm</strong>
                         </div>
                         <div style="display: flex; justify-content: space-between; font-size: 0.875rem;">
                             <span>Sleep Score Delta:</span>
-                            <strong style="color: {'#ef4444' if alc['delta_sleep'] and alc['delta_sleep'] < 0 else '#10b981'};">{alc['delta_sleep']:+.1f} pts</strong>
+                            <strong style="color: {STATUS_CRITICAL if alc['delta_sleep'] and alc['delta_sleep'] < 0 else STATUS_GOOD};">{alc['delta_sleep']:+.1f} pts</strong>
                         </div>
                     </div>
                 </div>
@@ -1406,7 +1434,7 @@ with tab_spo2:
         with kpi_col1:
             nadir_display = f"{worst_event['nadir_spo2']}%" if worst_event else (f"{int(spo2_min_val)}%" if spo2_min_val else "—")
             nadir_time_display = f"{worst_event['nadir_time']}" if worst_event else "No drops"
-            nadir_color = "#ef4444" if (worst_event and worst_event['nadir_spo2'] < 85) else ("#f59e0b" if (worst_event and worst_event['nadir_spo2'] < 90) else "#10b981")
+            nadir_color = STATUS_CRITICAL if (worst_event and worst_event['nadir_spo2'] < 85) else (STATUS_WARNING if (worst_event and worst_event['nadir_spo2'] < 90) else STATUS_GOOD)
             st.markdown(f"""
             <div class="shadcn-card" style="padding: 16px; border-left: 4px solid {nadir_color};">
                 <div style="font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted-foreground);">
@@ -1428,7 +1456,7 @@ with tab_spo2:
             crit_count = sum(1 for e in drop_events if e.get("severity") == "CRITICAL")
             warn_count = sum(1 for e in drop_events if e.get("severity") == "WARNING")
             mild_count = sum(1 for e in drop_events if e.get("severity") == "MILD")
-            event_badge_color = "#ef4444" if crit_count > 0 else ("#f59e0b" if warn_count > 0 else "#10b981")
+            event_badge_color = STATUS_CRITICAL if crit_count > 0 else (STATUS_WARNING if warn_count > 0 else STATUS_GOOD)
             st.markdown(f"""
             <div class="shadcn-card" style="padding: 16px; border-left: 4px solid {event_badge_color};">
                 <div style="font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted-foreground);">
@@ -1438,9 +1466,9 @@ with tab_spo2:
                     {len(drop_events)} <span style="font-size: 0.875rem; font-weight: 500; color: var(--muted-foreground);">discrete drops</span>
                 </div>
                 <div style="font-size: 0.8rem; color: var(--muted-foreground); margin-top: 4px;">
-                    <span style="color: #ef4444; font-weight: 600;">{crit_count} Critical</span> &bull; 
-                    <span style="color: #f59e0b; font-weight: 600;">{warn_count} Warning</span> &bull; 
-                    <span style="color: #10b981; font-weight: 600;">{mild_count} Mild</span>
+                    <span style="color: {STATUS_CRITICAL}; font-weight: 600;">{crit_count} Critical</span> &bull;
+                    <span style="color: {STATUS_WARNING}; font-weight: 600;">{warn_count} Warning</span> &bull;
+                    <span style="color: {STATUS_GOOD}; font-weight: 600;">{mild_count} Mild</span>
                 </div>
             </div>
             """, unsafe_allow_html=True)
@@ -1465,7 +1493,7 @@ with tab_spo2:
 
         with kpi_col4:
             t90_val = hypoxic_info.get("t90_minutes", 0.0)
-            t90_color = "#ef4444" if t90_val >= 10 else ("#f59e0b" if t90_val > 2 else "#10b981")
+            t90_color = STATUS_CRITICAL if t90_val >= 10 else (STATUS_WARNING if t90_val > 2 else STATUS_GOOD)
             st.markdown(f"""
             <div class="shadcn-card" style="padding: 16px; border-left: 4px solid {t90_color};">
                 <div style="font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted-foreground);">
@@ -1486,7 +1514,6 @@ with tab_spo2:
         st.markdown("<h4 style='font-size: 1.05rem; font-weight: 600; color: var(--foreground); margin-bottom: 8px;'>High-Resolution Nocturnal Trace & Exact Desaturation Moments</h4>", unsafe_allow_html=True)
 
         if not epochs_df.empty:
-            from plotly.subplots import make_subplots
             fig_timeline = make_subplots(
                 rows=2, cols=1,
                 shared_xaxes=True,
@@ -1514,7 +1541,7 @@ with tab_spo2:
             if drop_events:
                 pin_x = [e["nadir_time"] for e in drop_events]
                 pin_y = [e["nadir_spo2"] for e in drop_events]
-                pin_colors = ["#ef4444" if e["severity"] == "CRITICAL" else ("#f59e0b" if e["severity"] == "WARNING" else "#3b82f6") for e in drop_events]
+                pin_colors = [STATUS_CRITICAL if e["severity"] == "CRITICAL" else (STATUS_WARNING if e["severity"] == "WARNING" else "#3b82f6") for e in drop_events]
                 pin_customdata = [[e["drop_magnitude"], e["duration_seconds"], e["sleep_stage"], e.get("respiration_rate") or "—", e["severity"]] for e in drop_events]
 
                 fig_timeline.add_trace(
@@ -1531,7 +1558,7 @@ with tab_spo2:
                         ),
                         text=[f"{y}%" for y in pin_y],
                         textposition="bottom center",
-                        textfont=dict(size=10, color="#ef4444"),
+                        textfont=dict(size=10, color=STATUS_CRITICAL),
                         customdata=pin_customdata,
                         hovertemplate=(
                             "🚨 <b>EXACT DROP EVENT</b><br>"
@@ -1586,9 +1613,9 @@ with tab_spo2:
             table_rows_html = []
             for i, ev in enumerate(drop_events, 1):
                 sev_badge = (
-                    "<span style='background:#ef444420; color:#ef4444; font-weight:600; padding:2px 8px; border-radius:9999px;'>🚨 Critical</span>"
+                    f"<span style='background:{STATUS_CRITICAL}20; color:{STATUS_CRITICAL}; font-weight:600; padding:2px 8px; border-radius:9999px;'>🚨 Critical</span>"
                     if ev["severity"] == "CRITICAL" else
-                    ("<span style='background:#f59e0b20; color:#f59e0b; font-weight:600; padding:2px 8px; border-radius:9999px;'>⚠️ Warning</span>"
+                    (f"<span style='background:{STATUS_WARNING}20; color:{STATUS_WARNING}; font-weight:600; padding:2px 8px; border-radius:9999px;'>⚠️ Warning</span>"
                      if ev["severity"] == "WARNING" else
                      "<span style='background:#3b82f620; color:#3b82f6; font-weight:600; padding:2px 8px; border-radius:9999px;'>🔹 Mild</span>")
                 )
@@ -1599,7 +1626,7 @@ with tab_spo2:
                     f"<td style='padding: 8px 12px;'>{ev.get('start_time', '—')}</td>"
                     f"<td style='padding: 8px 12px; font-weight: 700;'>{ev.get('nadir_time', '—')}</td>"
                     f"<td style='padding: 8px 12px;'>{ev.get('end_time', '—')}</td>"
-                    f"<td style='padding: 8px 12px; font-weight: 700; color: #ef4444;'>{ev.get('nadir_spo2')}%</td>"
+                    f"<td style='padding: 8px 12px; font-weight: 700; color: {STATUS_CRITICAL};'>{ev.get('nadir_spo2')}%</td>"
                     f"<td style='padding: 8px 12px;'>-{ev.get('drop_magnitude')} %</td>"
                     f"<td style='padding: 8px 12px;'>{ev.get('duration_seconds')}s</td>"
                     f"<td style='padding: 8px 12px;'><span style='background:#8b5cf620; color:#a78bfa; padding:2px 6px; border-radius:4px; font-weight:600; font-size:0.75rem;'>{ev.get('sleep_stage', 'Sleep')}</span></td>"
@@ -1690,9 +1717,9 @@ with tab_spo2:
             m_rows = []
             for _, r in hist_events_df.iterrows():
                 s_badge = (
-                    "<span style='background:#ef444420; color:#ef4444; font-weight:600; padding:2px 8px; border-radius:9999px;'>🚨 Critical</span>"
+                    f"<span style='background:{STATUS_CRITICAL}20; color:{STATUS_CRITICAL}; font-weight:600; padding:2px 8px; border-radius:9999px;'>🚨 Critical</span>"
                     if r["severity"] == "CRITICAL" else
-                    ("<span style='background:#f59e0b20; color:#f59e0b; font-weight:600; padding:2px 8px; border-radius:9999px;'>⚠️ Warning</span>"
+                    (f"<span style='background:{STATUS_WARNING}20; color:{STATUS_WARNING}; font-weight:600; padding:2px 8px; border-radius:9999px;'>⚠️ Warning</span>"
                      if r["severity"] == "WARNING" else
                      "<span style='background:#3b82f620; color:#3b82f6; font-weight:600; padding:2px 8px; border-radius:9999px;'>🔹 Mild</span>")
                 )
@@ -1703,7 +1730,7 @@ with tab_spo2:
                     f"<td style='padding: 8px 12px;'>{r['start_time']}</td>"
                     f"<td style='padding: 8px 12px; font-weight: 700; color: var(--foreground);'>{r['nadir_time']}</td>"
                     f"<td style='padding: 8px 12px;'>{r['end_time']}</td>"
-                    f"<td style='padding: 8px 12px; font-weight: 700; color: #ef4444;'>{r['nadir_spo2']}%</td>"
+                    f"<td style='padding: 8px 12px; font-weight: 700; color: {STATUS_CRITICAL};'>{r['nadir_spo2']}%</td>"
                     f"<td style='padding: 8px 12px;'>-{r['drop_magnitude']}%</td>"
                     f"<td style='padding: 8px 12px;'>{int(r['duration_seconds'])}s</td>"
                     f"<td style='padding: 8px 12px;'><span style='background: #8b5cf620; color: #a78bfa; padding: 2px 6px; border-radius: 4px; font-weight: 600; font-size: 0.75rem;'>{r['sleep_stage']}</span></td>"
@@ -1772,7 +1799,7 @@ with tab_spo2:
                     f"<tr style='border-bottom: 1px solid var(--border); color: var(--foreground);'>"
                     f"<td style='padding: 8px 12px; font-weight: 600;'>{item['date']}</td>"
                     f"<td style='padding: 8px 12px; font-weight: 600;'>{item['total_drops']} drops</td>"
-                    f"<td style='padding: 8px 12px; font-weight: 700; color: #ef4444;'>{item['lowest_nadir']}%</td>"
+                    f"<td style='padding: 8px 12px; font-weight: 700; color: {STATUS_CRITICAL};'>{item['lowest_nadir']}%</td>"
                     f"<td style='padding: 8px 12px;'><code>{item['nadir_moment']}</code></td>"
                     f"<td style='padding: 8px 12px;'>{item['avg_duration']}s</td>"
                     f"<td style='padding: 8px 12px; font-weight: 700; color: {item['status_color']};'>{item['odi_score']} / hr</td>"
@@ -1823,7 +1850,7 @@ with tab_spo2:
             st.markdown(f"""
             <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px;">
                 <h4 style="font-size: 0.95rem; font-weight: 600; color: var(--foreground); margin: 0;">24-Hour Desaturation Frequency</h4>
-                <span style="font-size: 0.75rem; font-weight: 600; padding: 2px 8px; border-radius: 9999px; background: #ef444415; color: #ef4444;">
+                <span style="font-size: 0.75rem; font-weight: 600; padding: 2px 8px; border-radius: 9999px; background: {STATUS_CRITICAL}15; color: {STATUS_CRITICAL};">
                     Peak Window: {chrono_all['peak_window']}
                 </span>
             </div>
@@ -1835,7 +1862,7 @@ with tab_spo2:
                     x=[f"{h:02d}:00" for h in hourly_df["hour"]],
                     y=hourly_df["drops_below_90"],
                     name="Drops <90%",
-                    marker=dict(color="#ef4444", opacity=0.85),
+                    marker=dict(color=STATUS_CRITICAL, opacity=0.85),
                     hovertemplate="<b>Hour:</b> %{x}<br><b>Desaturation Dips:</b> %{y}<extra></extra>"
                 ))
                 fig_hourly_bar.update_layout(
@@ -1916,7 +1943,7 @@ with tab_spo2:
                     hour_summary_rows.append(
                         f"<tr style='border-bottom: 1px solid var(--border); color: var(--foreground);'>"
                         f"<td style='padding: 8px 12px; font-weight: 600;'>{label}</td>"
-                        f"<td style='padding: 8px 12px; font-weight: 700; color: #ef4444;'>{count} drops ({pct}%)</td>"
+                        f"<td style='padding: 8px 12px; font-weight: 700; color: {STATUS_CRITICAL};'>{count} drops ({pct}%)</td>"
                         f"<td style='padding: 8px 12px;'>{avg_nad}%</td>"
                         f"<td style='padding: 8px 12px;'><code>{worst_desc}</code></td>"
                         f"<td style='padding: 8px 12px;'><span style='background: #8b5cf620; color: #a78bfa; padding: 2px 6px; border-radius: 4px; font-weight: 600; font-size: 0.75rem;'>{top_stage}</span></td>"
@@ -2203,31 +2230,32 @@ with tab_comp:
     
     with col_chart:
         if not comp_df.empty:
-            fig_comp = go.Figure()
+            # Small multiples (shared x-axis) instead of a dual-axis chart —
+            # kg and body-fat % are different units and shouldn't share a scale.
+            fig_comp = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08)
             fig_comp.add_trace(go.Scatter(
                 x=comp_df["date"], y=comp_df["weight"],
                 mode="lines+markers", name="Weight (kg)",
                 line=dict(color="#2563eb", width=2),
-                marker=dict(size=4)
-            ))
+                marker=dict(size=8)
+            ), row=1, col=1)
             if "body_fat" in comp_df.columns and comp_df["body_fat"].notna().any():
                 fig_comp.add_trace(go.Scatter(
                     x=comp_df["date"], y=comp_df["body_fat"],
                     mode="lines+markers", name="Body Fat (%)",
                     line=dict(color="#db2777", width=2),
-                    marker=dict(size=4),
-                    yaxis="y2"
-                ))
+                    marker=dict(size=8)
+                ), row=2, col=1)
             fig_comp.update_layout(
                 template=plotly_template,
                 hovermode="x unified",
-                yaxis=dict(title="Weight (kg)", side="left", gridcolor=grid_color),
-                yaxis2=dict(title="Body Fat (%)", overlaying="y", side="right", showgrid=False),
                 plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                height=320,
+                height=420,
                 margin=dict(l=40, r=40, t=10, b=30),
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
             )
+            fig_comp.update_yaxes(title_text="Weight (kg)", gridcolor=grid_color, row=1, col=1)
+            fig_comp.update_yaxes(title_text="Body Fat (%)", gridcolor=grid_color, row=2, col=1)
             st.plotly_chart(fig_comp, use_container_width=True)
         else:
             st.markdown("""
@@ -2269,7 +2297,7 @@ with tab_ai:
         <div class="shadcn-card" style="padding: 24px;">
             <div style="font-weight: 600; font-size: 0.875rem;">No AI Summary Found</div>
             <p style="font-size: 0.875rem; color: var(--muted-foreground); margin-top: 4px;">
-                You can generate a biometric coaching analysis from your SQLite database history on-demand using the button below.
+                You can generate a biometric coaching analysis from your database history on-demand using the button below.
             </p>
         </div>
         """, unsafe_allow_html=True)
@@ -2328,8 +2356,8 @@ with tab_ai:
             
         if is_alcohol or latest_df.get("alcohol_logged") == 1:
             st.markdown(f"""
-            <div class="shadcn-alert" style="border-left: 4px solid #ef4444;">
-                <div style="font-weight: 700; color: #ef4444; font-size: 0.875rem;">Recovery Disruption Alert</div>
+            <div class="shadcn-alert" style="border-left: 4px solid {STATUS_CRITICAL};">
+                <div style="font-weight: 700; color: {STATUS_CRITICAL}; font-size: 0.875rem;">Recovery Disruption Alert</div>
                 <div style="font-size: 0.875rem; margin-top: 4px; line-height: 1.5;">
                     Metabolic strain detected (matching alcohol or immune activity):
                     <ul style="margin-left: 16px; margin-top: 4px;">
@@ -2341,8 +2369,8 @@ with tab_ai:
             """, unsafe_allow_html=True)
         else:
             st.markdown(f"""
-            <div class="shadcn-alert" style="border-left: 4px solid #10b981;">
-                <div style="font-weight: 700; color: #10b981; font-size: 0.875rem;">Recovery Balance Normal</div>
+            <div class="shadcn-alert" style="border-left: 4px solid {STATUS_GOOD};">
+                <div style="font-weight: 700; color: {STATUS_GOOD}; font-size: 0.875rem;">Recovery Balance Normal</div>
                 <p style="font-size: 0.875rem; margin-top: 4px; line-height: 1.5; color: var(--muted-foreground);">
                     No systemic metabolic stress signatures detected. Autonomic recovery indicators remain inside typical baseline variance.
                 </p>
@@ -2360,8 +2388,8 @@ with tab_ai:
             
         if is_apnea or latest_df.get("sleep_apnea_flag") == 1:
             st.markdown(f"""
-            <div class="shadcn-alert" style="border-left: 4px solid #f59e0b;">
-                <div style="font-weight: 700; color: #f59e0b; font-size: 0.875rem;">Sleep Desaturation Flagged</div>
+            <div class="shadcn-alert" style="border-left: 4px solid {STATUS_WARNING};">
+                <div style="font-weight: 700; color: {STATUS_WARNING}; font-size: 0.875rem;">Sleep Desaturation Flagged</div>
                 <div style="font-size: 0.875rem; margin-top: 4px; line-height: 1.5;">
                     Blood oxygen desaturation events occurred during sleep:
                     <ul style="margin-left: 16px; margin-top: 4px;">
@@ -2373,8 +2401,8 @@ with tab_ai:
             """, unsafe_allow_html=True)
         else:
             st.markdown(f"""
-            <div class="shadcn-alert" style="border-left: 4px solid #10b981;">
-                <div style="font-weight: 700; color: #10b981; font-size: 0.875rem;">Oxygen Levels Stable</div>
+            <div class="shadcn-alert" style="border-left: 4px solid {STATUS_GOOD};">
+                <div style="font-weight: 700; color: {STATUS_GOOD}; font-size: 0.875rem;">Oxygen Levels Stable</div>
                 <p style="font-size: 0.875rem; margin-top: 4px; line-height: 1.5; color: var(--muted-foreground);">
                     No blood oxygen desaturation incidents registered during sleep. Overnight SpO2 values stayed stable.
                 </p>
@@ -2427,7 +2455,7 @@ with tab_recovery:
             
         with col_p2:
             status_text = "Fully Recovered" if days_needed == 0 else f"{days_needed} days"
-            border_col = "#10b981" if days_needed == 0 else "#f59e0b"
+            border_col = STATUS_GOOD if days_needed == 0 else STATUS_WARNING
             st.markdown(f"""
             <div class="shadcn-card" style="border-top: 3px solid {border_col};">
                 <div class="shadcn-card-header">
@@ -2451,9 +2479,9 @@ with tab_recovery:
         text=[f"{int(v)}ms" for v in forecast_values],
         textposition="top center",
         line=dict(color="#6366f1", width=2, dash="dash"),
-        marker=dict(size=6)
+        marker=dict(size=8)
     ))
-    fig_forecast.add_hline(y=target_hrv_val, line_dash="solid", line_color="#ef4444")
+    fig_forecast.add_hline(y=target_hrv_val, line_dash="solid", line_color=STATUS_CRITICAL)
     fig_forecast.update_layout(
         template=plotly_template,
         title="5-Day HRV Projection",
@@ -2469,7 +2497,7 @@ with tab_recovery:
 # ==================== TAB 6: RECORDED DATA EXPLORER ====================
 with tab_data:
     st.markdown(f"<h3 style='font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 6px; display: flex; align-items: center;'>{LUCIDE_DATABASE} Recorded Data Explorer</h3>", unsafe_allow_html=True)
-    st.markdown("<p style='font-size: 0.875rem; color: var(--muted-foreground); margin: 0 0 18px 0;'>Search, inspect, analyze, and export records across all biometric tables in your local SQLite database.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='font-size: 0.875rem; color: var(--muted-foreground); margin: 0 0 18px 0;'>Search, inspect, analyze, and export records across all biometric tables in your database.</p>", unsafe_allow_html=True)
 
     # Multi-Dataset Selector
     dataset_col, spacer_col = st.columns([4, 6])
