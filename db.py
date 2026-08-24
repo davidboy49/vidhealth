@@ -381,8 +381,8 @@ def save_day(date_str: str, raw_data: dict):
         date, hrv_last_night, hrv_weekly_avg, hrv_status, sleep_score, sleep_duration,
         sleep_deep, sleep_light, sleep_rem, sleep_awake, resting_hr, min_hr, max_hr,
         bb_max, bb_min, bb_charged, bb_drained, stress_avg, stress_max, steps, floors,
-        training_readiness, spo2_avg, spo2_min, respiration_avg, respiration_min, raw_json
-    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        training_readiness, spo2_avg, spo2_min, respiration_avg, respiration_min, raw_json, synced_at
+    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
     ON CONFLICT(date) DO UPDATE SET
         hrv_last_night = excluded.hrv_last_night,
         hrv_weekly_avg = excluded.hrv_weekly_avg,
@@ -409,7 +409,8 @@ def save_day(date_str: str, raw_data: dict):
         spo2_min = excluded.spo2_min,
         respiration_avg = excluded.respiration_avg,
         respiration_min = excluded.respiration_min,
-        raw_json = excluded.raw_json
+        raw_json = excluded.raw_json,
+        synced_at = NOW()
     """, (
         date_str, hrv_last_night, hrv_weekly_avg, hrv_status, sleep_score, sleep_duration,
         sleep_deep, sleep_light, sleep_rem, sleep_awake, resting_hr, min_hr, max_hr,
@@ -1097,8 +1098,8 @@ def backfill_spo2_epochs_if_needed():
         count = c.fetchone()[0]
         conn.close()
         
-        if count == 0:
-            raw_data = json.loads(raw_json_str) if raw_json_str else {}
+        if count == 0 and raw_json_str:
+            raw_data = json.loads(raw_json_str)
             process_and_save_spo2(date_str, raw_data)
 
 

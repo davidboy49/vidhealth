@@ -8,4 +8,5 @@ ConditionPathExists=/root/garmin-health/.env
 Type=oneshot
 User=root
 WorkingDirectory=/root/garmin-health
-ExecStart=/usr/local/lib/hermes-agent/venv/bin/python sync.py today
+EnvironmentFile=/root/garmin-health/.env
+ExecStart=/root/garmin-health/venv/bin/python sync.py today

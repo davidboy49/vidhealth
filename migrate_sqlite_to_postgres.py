@@ -52,7 +52,7 @@ TABLES = [
         "id", "date", "hour", "spo2_avg", "spo2_min", "spo2_max", "sample_count",
         "drops_below_90", "drops_below_85", "hypoxic_minutes", "respiration_avg",
         "dominant_sleep_stage", "lowest_timestamp",
-    ], "id"),
+    ], "date, hour"),
     ("garmin_activities", [
         "activity_id", "date", "start_time", "activity_name", "activity_type",
         "duration_seconds", "elapsed_duration_seconds", "distance_meters",

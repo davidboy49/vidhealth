@@ -301,12 +301,17 @@ LUCIDE_DATABASE = '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18
 LUCIDE_SEARCH = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide-icon"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>'
 LUCIDE_DOWNLOAD = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide-icon"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>'
 
-# Get last sync time — most recent date with a daily_metrics row.
+# Get last sync time — actual sync timestamp (synced_at), fallback to date.
 last_sync_str = "Never"
 try:
     _latest = db.get_df(limit=1)
     if not _latest.empty:
-        last_sync_str = pd.to_datetime(_latest.iloc[-1]["date"]).strftime("%b %d, %Y")
+        _row = _latest.iloc[-1]
+        _synced = _row.get("synced_at")
+        if _synced is not None and not pd.isna(_synced):
+            last_sync_str = pd.to_datetime(_synced).strftime("%b %d, %Y %H:%M")
+        else:
+            last_sync_str = pd.to_datetime(_row["date"]).strftime("%b %d, %Y") + " (legacy)"
 except Exception:
     pass
 
