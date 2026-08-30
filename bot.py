@@ -1,7 +1,9 @@
 import os
 import sys
+import json
 import logging
 import html
+import subprocess
 from pathlib import Path
 from datetime import datetime, date, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -448,6 +450,44 @@ async def master_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def xlsx_statement_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Import an ABA .xlsx bank statement into Sure (auto bank-statement import)."""
+    if not await check_auth(update, context):
+        return
+    doc = update.message.document
+    fname = (doc.file_name or "").lower()
+    if not fname.endswith(".xlsx"):
+        await update.message.reply_text("Send an ABA bank statement (.xlsx) to import into Sure.")
+        return
+    path = f"/tmp/statement_{doc.file_id[:10]}.xlsx"
+    try:
+        f = await context.bot.get_file(doc.file_id)
+        await f.download_to_drive(path)
+    except Exception as e:
+        await update.message.reply_text(f"❌ Could not download file: {e}")
+        return
+    await update.message.reply_text("📥 Importing statement into Sure…")
+    proc = None
+    try:
+        proc = subprocess.run(
+            ["/root/sure_import/venv/bin/python", "/root/sure_import/bank_statement_import.py", path],
+            capture_output=True, text=True, timeout=180,
+        )
+        summary = json.loads(proc.stdout.strip().splitlines()[-1])
+    except Exception:
+        summary = {"error": (proc.stderr.strip() or proc.stdout.strip())[-300:] if 'proc' in dir() else "subprocess failed"}
+    if "error" in summary:
+        await update.message.reply_text(f"❌ Import failed: {summary['error']}")
+    else:
+        await update.message.reply_text(
+            f"✅ <b>Sure import done</b>\n"
+            f"• Imported: <b>{summary.get('rows_imported', 0)}</b>\n"
+            f"• Already existed (skipped): {summary.get('rows_skipped_dupe', 0)}\n"
+            f"• Failed: {summary.get('rows_failed', 0)}",
+            parse_mode="HTML",
+        )
+
+
 async def log_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_auth(update, context):
         return
@@ -800,6 +840,7 @@ def main():
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("log", log_command))
     app.add_handler(CommandHandler("master", master_command))
+    app.add_handler(MessageHandler(filters.Document.FileExtension("xlsx"), xlsx_statement_handler))
     app.add_handler(CommandHandler("note", note_command))
     app.add_handler(CommandHandler("habit", habit_command))
     app.add_handler(CommandHandler("notes", notes_command))
