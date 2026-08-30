@@ -405,6 +405,9 @@ def get_unholy_habits_keyboard():
             InlineKeyboardButton("⚡ High Mental Stress", callback_data="log_habit:mental_stress:1:High Mental Stress")
         ],
         [
+            InlineKeyboardButton("💥 Master", callback_data="log_habit:master:1:Master")
+        ],
+        [
             InlineKeyboardButton("🔙 Back to Main Menu", callback_data="menu_main")
         ]
     ])
