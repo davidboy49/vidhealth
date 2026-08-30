@@ -445,7 +445,9 @@ async def master_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(
         f"💥 <b>Master logged</b> ({qty}) for <code>{today_str}</code>.\n"
-        f"Hermes Coach will correlate this with tomorrow's HRV — no judgment, data only.",
+        f"Hermes Coach will correlate this with tomorrow's HRV — no judgment, data only.\n\n"
+        f"⚡ <b>Redirect:</b> that urge was fuel. Spend it first: <b>50 pushups</b> / cold shower / 10-min sprint. "
+        f"Still want it after? Your call. But the 7-day man you met — he runs on this energy, not off it.",
         parse_mode="HTML"
     )
 
