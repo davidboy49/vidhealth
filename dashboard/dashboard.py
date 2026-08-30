@@ -799,7 +799,7 @@ with tab_today:
             if "Unholy Habit" in log_type:
                 habit_preset = st.selectbox(
                     "Habit Preset",
-                    ["Alcohol", "Late Meal", "Late Caffeine", "Late Screen Time", "Nicotine", "High Mental Stress", "➕ Custom (Type your own)"],
+                    ["Alcohol", "Late Meal", "Late Caffeine", "Late Screen Time", "Nicotine", "High Mental Stress", "Master", "➕ Custom (Type your own)"],
                     key="quick_habit_tag"
                 )
                 if "Custom" in habit_preset:
