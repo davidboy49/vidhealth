@@ -18,9 +18,9 @@ from recovery_predictor import RecoveryPredictor
 st.set_page_config(page_title="My Health", page_icon="⚡", layout="wide")
 
 # ---------- THEME CONFIGURATION (SHADCN STYLING) ----------
-# FIRST PRIORITY: Default to Light mode
+# FIRST PRIORITY: Default to Dark mode
 if "theme" not in st.session_state:
-    st.session_state.theme = "light"
+    st.session_state.theme = "dark"
 
 # Apply CSS variables matching Shadcn UI design tokens
 if st.session_state.theme == "dark":
