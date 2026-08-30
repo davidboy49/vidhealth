@@ -580,6 +580,16 @@ def delete_activity_log(log_id: int) -> bool:
 
 # ---------- ANOMALY ALERTS ----------
 
+def delete_anomaly_alert(date_str: str, alert_type: str) -> None:
+    """Removes a previously-saved alert for (date, alert_type) — used to replace stale alerts."""
+    init_db()
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM anomaly_alerts WHERE date = %s AND alert_type = %s", (date_str, alert_type))
+    conn.commit()
+    conn.close()
+
+
 def save_anomaly_alert(date_str: str, severity: str, alert_type: str, message: str, metrics_dict: dict | None = None) -> int:
     """
     Records an anomaly alert.

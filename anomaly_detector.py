@@ -196,24 +196,29 @@ def dispatch_alerts_if_needed(target_date: str | None = None, notify_telegram: b
         return []
 
     existing_alerts = db.get_recent_alerts(limit=50)
-    existing_keys = {(a["date"], a["alert_type"]) for a in existing_alerts}
+    existing_map = {(a["date"], a["alert_type"]): a for a in existing_alerts}
 
     dispatched = []
     for anomaly in anomalies:
         key = (anomaly["date"], anomaly["alert_type"])
-        if key not in existing_keys:
-            # Save to database
-            db.save_anomaly_alert(
-                date_str=anomaly["date"],
-                severity=anomaly["severity"],
-                alert_type=anomaly["alert_type"],
-                message=anomaly["message"],
-                metrics_dict=anomaly.get("metrics")
-            )
-            dispatched.append(anomaly)
+        old = existing_map.get(key)
+        if old and old.get("message") == anomaly["message"]:
+            continue  # unchanged — don't re-notify
+        if old:
+            # Stale alert (e.g. partial 7am data) — replace with the corrected one
+            db.delete_anomaly_alert(date_str=anomaly["date"], alert_type=anomaly["alert_type"])
+        # Save to database
+        db.save_anomaly_alert(
+            date_str=anomaly["date"],
+            severity=anomaly["severity"],
+            alert_type=anomaly["alert_type"],
+            message=anomaly["message"],
+            metrics_dict=anomaly.get("metrics")
+        )
+        dispatched.append(anomaly)
 
-            # Send Telegram push if enabled
-            if notify_telegram and BOT_TOKEN and AUTHORIZED_CHAT_ID:
+        # Send Telegram push if enabled
+        if notify_telegram and BOT_TOKEN and AUTHORIZED_CHAT_ID:
                 try:
                     asyncio.run(_send_telegram_alert(anomaly))
                 except Exception as e:
