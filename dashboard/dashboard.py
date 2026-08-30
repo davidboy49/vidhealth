@@ -794,12 +794,12 @@ with tab_today:
     with col_logs_add:
         with st.expander("➕ Quick Log Habit or Note", expanded=True):
             log_date_val = st.date_input("Entry Date", value=date.today())
-            log_type = st.selectbox("Category", ["😈 Unholy Habit", "📝 Free Note"], key="quick_log_cat")
+            log_type = st.selectbox("Category", ["😈 Unholy Habit", "💥 Master", "📝 Free Note"], key="quick_log_cat")
             
             if "Unholy Habit" in log_type:
                 habit_preset = st.selectbox(
                     "Habit Preset",
-                    ["Alcohol", "Late Meal", "Late Caffeine", "Late Screen Time", "Nicotine", "High Mental Stress", "Master", "➕ Custom (Type your own)"],
+                    ["Alcohol", "Late Meal", "Late Caffeine", "Late Screen Time", "Nicotine", "High Mental Stress", "➕ Custom (Type your own)"],
                     key="quick_habit_tag"
                 )
                 if "Custom" in habit_preset:
@@ -810,14 +810,18 @@ with tab_today:
 
                 habit_val = st.number_input("Count / Units (e.g. drinks, minutes, mg)", min_value=0.5, max_value=500.0, value=1.0, step=0.5, key="quick_habit_val")
                 habit_note = st.text_input("Details / Note (optional)", placeholder="e.g. 20 mins @ 90°C or 2 pints IPA", key="quick_habit_note")
+            elif "Master" in log_type:
+                habit_tag = "master"
+                habit_val = st.number_input("Count", min_value=0.5, max_value=500.0, value=1.0, step=0.5, key="quick_master_val")
+                habit_note = st.text_input("Details / Note (optional)", key="quick_master_note")
             else:
                 habit_tag = "note"
                 habit_val = None
                 habit_note = st.text_area("Note Content", placeholder="e.g. Red eye flight, heavy squat session, feeling fatigued", key="quick_note_content")
             
             if st.button("Save Entry", key="quick_log_submit_btn", type="primary", use_container_width=True):
-                cat_key = "unholy_habit" if "Unholy Habit" in log_type else "free_note"
-                tag_key = habit_tag.lower().replace(" ", "_") if "Unholy Habit" in log_type else "note"
+                cat_key = "unholy_habit" if "Unholy Habit" in log_type else ("master" if "Master" in log_type else "free_note")
+                tag_key = habit_tag.lower().replace(" ", "_") if ("Unholy Habit" in log_type or "Master" in log_type) else "note"
                 entry_date_str = log_date_val.isoformat()
                 
                 db.log_activity(
@@ -2847,7 +2851,7 @@ with tab_data:
             with col_log_table:
                 display_logs = logs_df.copy().sort_values("timestamp", ascending=False)
                 display_logs["tag"] = display_logs["tag"].str.replace("_", " ").str.title()
-                display_logs["category"] = display_logs["category"].map({"unholy_habit": "Unholy Habit", "free_note": "Free Note"}).fillna(display_logs["category"])
+                display_logs["category"] = display_logs["category"].map({"unholy_habit": "Unholy Habit", "master": "Master", "free_note": "Free Note"}).fillna(display_logs["category"])
                 st.dataframe(
                     display_logs.rename(columns={
                         "id": "ID", "date": "Date", "timestamp": "Timestamp",

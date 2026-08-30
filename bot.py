@@ -66,6 +66,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Here are the available commands:\n"
         "🔄 /sync - Smart sync Garmin data (e.g. `/sync` or `/sync 7`)\n"
         "✍️ /log - Interactive daily activity & unholy habit logger\n"
+        "💥 /master - Log Master (optional qty, e.g. `/master 2`)\n"
         "📊 /health - Today's health metrics snapshot\n"
         "🧠 /insights - Biometric intelligence & HRV baseline bands\n"
         "🫁 /spo2 - Nocturnal SpO2 & desaturation drops analysis\n"
@@ -424,6 +425,29 @@ def get_alcohol_keyboard():
         ]
     ])
 
+async def master_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """💥 /master [qty] — log Master as its own category. No judgment, data only."""
+    qty = 1.0
+    if context.args:
+        try:
+            qty = float(context.args[0].replace(",", "."))
+        except (ValueError, IndexError):
+            qty = 1.0
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    db.log_activity(
+        date_str=today_str,
+        category="master",
+        tag="master",
+        note="",
+        value=qty
+    )
+    await update.message.reply_text(
+        f"💥 <b>Master logged</b> ({qty}) for <code>{today_str}</code>.\n"
+        f"Hermes Coach will correlate this with tomorrow's HRV — no judgment, data only.",
+        parse_mode="HTML"
+    )
+
+
 async def log_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_auth(update, context):
         return
@@ -775,6 +799,7 @@ def main():
     # Handlers
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("log", log_command))
+    app.add_handler(CommandHandler("master", master_command))
     app.add_handler(CommandHandler("note", note_command))
     app.add_handler(CommandHandler("habit", habit_command))
     app.add_handler(CommandHandler("notes", notes_command))
