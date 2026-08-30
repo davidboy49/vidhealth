@@ -309,7 +309,10 @@ try:
         _row = _latest.iloc[-1]
         _synced = _row.get("synced_at")
         if _synced is not None and not pd.isna(_synced):
-            last_sync_str = pd.to_datetime(_synced).strftime("%b %d, %Y %H:%M")
+            _last = pd.to_datetime(_synced)
+            if _last.tzinfo is None:
+                _last = _last.tz_localize("UTC")
+            last_sync_str = _last.tz_convert("Asia/Phnom_Penh").strftime("%b %d, %Y %H:%M")
         else:
             last_sync_str = pd.to_datetime(_row["date"]).strftime("%b %d, %Y") + " (legacy)"
 except Exception:
