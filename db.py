@@ -143,8 +143,15 @@ CREATE TABLE IF NOT EXISTS daily_metrics (
     alcohol_logged      INTEGER DEFAULT 0,
     sleep_apnea_flag    INTEGER DEFAULT 0,
     ai_summary          TEXT,
-    raw_json            TEXT
+    raw_json            TEXT,
+    synced_at           TIMESTAMPTZ
 );
+
+-- synced_at was added to save_day()'s INSERT after this table had already
+-- been created on some databases (via a manual ALTER, not through init_db()).
+-- This keeps a fresh install and an already-existing table converging on the
+-- same schema instead of only the manually-patched database having the column.
+ALTER TABLE daily_metrics ADD COLUMN IF NOT EXISTS synced_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS body_comp (
     date        TEXT PRIMARY KEY,
