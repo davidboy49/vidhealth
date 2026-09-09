@@ -18,9 +18,17 @@ from recovery_predictor import RecoveryPredictor
 st.set_page_config(page_title="My Health", page_icon="⚡", layout="wide")
 
 # ---------- THEME CONFIGURATION (SHADCN STYLING) ----------
-# FIRST PRIORITY: Default to Light mode
+# Default to whatever Streamlit's own active theme already is (the viewer's
+# browser/OS preference, or their prior choice in the ⋮ menu). That's the
+# theme every native widget already renders in — st.dataframe in particular
+# can't be restyled by our injected CSS below, so a hardcoded "light" default
+# used to fight the real one and show a light table on a dark page (or vice
+# versa) on first load. st.context.theme.type only reflects the theme as of
+# this connection, so it won't chase a mid-session native-menu change without
+# a full reload — that's a Streamlit platform limit, not something fixable
+# here. See the toggle button below for how a same-session override behaves.
 if "theme" not in st.session_state:
-    st.session_state.theme = "light"
+    st.session_state.theme = st.context.theme.type or "light"
 
 # Apply CSS variables matching Shadcn UI design tokens
 if st.session_state.theme == "dark":
@@ -332,7 +340,9 @@ with cols_header[2]:
     if st.button(
         "Light" if st.session_state.theme == "dark" else "Dark",
         use_container_width=True,
-        help="Switch dashboard theme.",
+        help="Switch the page's own colors. Interactive tables and other native "
+             "widgets follow your browser/OS theme instead — use the ⋮ menu → "
+             "Settings → Theme, then reload, if you want those to match too.",
     ):
         st.session_state.theme = "light" if st.session_state.theme == "dark" else "dark"
         st.rerun()
@@ -2281,29 +2291,15 @@ with tab_comp:
 with tab_ai:
     st.markdown(f"<h3 style='font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 12px; display: flex; align-items: center;'>{LUCIDE_SPARKLES} AI Coach Biometric Insights</h3>", unsafe_allow_html=True)
 
-    # Prefer the newly generated report in session state so the UI updates immediately.
-    saved_ai_summary = clean_text(latest_df.get("ai_summary"))
-    generated_ai_summary = clean_text(st.session_state.get("generated_ai_summary"))
-    if saved_ai_summary and saved_ai_summary != generated_ai_summary:
-        st.session_state["generated_ai_summary"] = saved_ai_summary
-        generated_ai_summary = saved_ai_summary
-    ai_summary = generated_ai_summary or saved_ai_summary
-
-    if ai_summary:
-        with st.container(border=True):
-            st.markdown(ai_summary)
-    else:
-        st.markdown("""
-        <div class="shadcn-card" style="padding: 24px;">
-            <div style="font-weight: 600; font-size: 0.875rem;">No AI Summary Found</div>
-            <p style="font-size: 0.875rem; color: var(--muted-foreground); margin-top: 4px;">
-                You can generate a biometric coaching analysis from your database history on-demand using the button below.
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
-
-    st.markdown("<div style='margin-bottom: 12px;'></div>", unsafe_allow_html=True)
-    col_model, col_btn = st.columns([1, 2])
+    col_type, col_model, col_btn = st.columns([1.1, 1, 1.3])
+    with col_type:
+        coach_type = st.selectbox(
+            "Coach Type",
+            options=["Weekly Recap", "Action Plan"],
+            index=0,
+            help="Weekly Recap summarizes what happened. Action Plan gives forward-looking "
+                 "steps for the next period and tracks a watch-list across periods.",
+        )
     with col_model:
         selected_model = st.selectbox(
             "Select AI Model",
@@ -2313,24 +2309,98 @@ with tab_ai:
         )
     with col_btn:
         st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
-        generate_clicked = st.button("Generate On-Demand AI Report", type="primary")
+        generate_clicked = st.button(f"Generate {coach_type}", type="primary")
 
-    if generate_clicked:
-        with st.spinner(f"AI Coach is compiling biometric analysis using {selected_model}..."):
-            try:
-                from ai_coach import generate_weekly_report
-                report = generate_weekly_report(days=7, model_override=selected_model)
-                cleaned_report = clean_text(report)
-                if cleaned_report:
-                    st.session_state["generated_ai_summary"] = cleaned_report
+    if coach_type == "Weekly Recap":
+        # Prefer the newly generated report in session state so the UI updates immediately.
+        saved_ai_summary = clean_text(latest_df.get("ai_summary"))
+        generated_ai_summary = clean_text(st.session_state.get("generated_ai_summary"))
+        if saved_ai_summary and saved_ai_summary != generated_ai_summary:
+            st.session_state["generated_ai_summary"] = saved_ai_summary
+            generated_ai_summary = saved_ai_summary
+        ai_summary = generated_ai_summary or saved_ai_summary
+
+        if ai_summary:
+            with st.container(border=True):
+                st.markdown(ai_summary)
+        else:
+            st.markdown("""
+            <div class="shadcn-card" style="padding: 24px;">
+                <div style="font-weight: 600; font-size: 0.875rem;">No AI Summary Found</div>
+                <p style="font-size: 0.875rem; color: var(--muted-foreground); margin-top: 4px;">
+                    You can generate a biometric coaching analysis from your database history on-demand using the button below.
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+
+        if generate_clicked:
+            with st.spinner(f"AI Coach is compiling biometric analysis using {selected_model}..."):
+                try:
+                    from ai_coach import generate_weekly_report
+                    report = generate_weekly_report(days=7, model_override=selected_model)
+                    cleaned_report = clean_text(report)
+                    if cleaned_report:
+                        st.session_state["generated_ai_summary"] = cleaned_report
+                        st.rerun()
+                    else:
+                        st.error("AI Coach finished, but the generated report was empty. No summary was saved.")
+                except Exception as e:
+                    st.error(
+                        "AI Coach could not generate the report. "
+                        f"Reason: {e}"
+                    )
+
+    else:  # Action Plan
+        # Prefer the newly generated plan in session state so the UI updates immediately.
+        saved_plan = db.get_latest_action_plan()
+        generated_plan = st.session_state.get("generated_action_plan")
+        plan = generated_plan or saved_plan
+
+        if plan:
+            if plan.get("headline"):
+                st.markdown(f"""
+                <div class="shadcn-card" style="padding: 18px; border-left: 4px solid {STATUS_GOOD}; margin-bottom: 12px;">
+                    <div style="font-size: 0.75rem; color: var(--muted-foreground); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">
+                        Action Plan &bull; {plan.get('period_start', '')} to {plan.get('period_end', '')}
+                    </div>
+                    <div style="font-size: 1.05rem; font-weight: 700; margin-top: 4px;">{plan['headline']}</div>
+                </div>
+                """, unsafe_allow_html=True)
+            with st.container(border=True):
+                st.markdown(plan["plan_text"])
+        else:
+            st.markdown("""
+            <div class="shadcn-card" style="padding: 24px;">
+                <div style="font-weight: 600; font-size: 0.875rem;">No Action Plan Generated Yet</div>
+                <p style="font-size: 0.875rem; color: var(--muted-foreground); margin-top: 4px;">
+                    Generate a forward-looking action plan for the next period using the button below.
+                    Unlike the Weekly Recap, it tracks a watch-list across periods so each plan can
+                    follow up on the last one.
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+
+        if generate_clicked:
+            with st.spinner(f"AI Coach is building an action plan using {selected_model}..."):
+                try:
+                    from ai_coach import generate_action_plan
+                    result = generate_action_plan(days=7, model_override=selected_model)
+                    st.session_state["generated_action_plan"] = result
                     st.rerun()
-                else:
-                    st.error("AI Coach finished, but the generated report was empty. No summary was saved.")
-            except Exception as e:
-                st.error(
-                    "AI Coach could not generate the report. "
-                    f"Reason: {e}"
-                )
+                except Exception as e:
+                    st.error(
+                        "AI Coach could not generate the action plan. "
+                        f"Reason: {e}"
+                    )
+
+        past_plans = [p for p in db.get_action_plans(limit=6) if not plan or p["id"] != plan.get("id")]
+        if past_plans:
+            with st.expander(f"Previous Action Plans ({len(past_plans)})"):
+                for p in past_plans:
+                    st.markdown(f"**{p.get('period_start', '')} to {p.get('period_end', '')}** — {p.get('headline') or '(no headline)'}")
+                    st.caption(f"Generated {p.get('generated_at', '')} &bull; {p.get('model', '')}", unsafe_allow_html=True)
+                    st.markdown(p["plan_text"])
+                    st.markdown("<hr style='margin: 8px 0;'>", unsafe_allow_html=True)
 
     st.markdown("---")
     

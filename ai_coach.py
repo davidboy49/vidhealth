@@ -242,41 +242,11 @@ Structure your response in clean markdown with these sections:
 2. **Key Patterns** — HRV, RHR, sleep, stress, SpO2, steps. Skip any metric with
    nothing meaningful to report. Lead each point with the number, then one sentence
    of interpretation.
-3. **Training & Recovery Guidelines for Next Week**
-Based on this analysis, the primary focus for the coming week will be on optimizing foundational recovery pillars while cautiously progressing with activity.
+3. **Training & Recovery Guidelines for Next Week** — guidance for training load,
+   sleep, and (only if the data in rule 3 above actually warrants it) recovery
+   flags, all directly justified by the numbers above. Skip any of these three
+   topics if nothing in the data justifies commenting on it.
 
-Workout Intensity & Deload vs. Full Send:
-- Given the positive trajectory in your HRV and RHR, your autonomic nervous system appears to be responding well to recent recovery efforts. You are in a state conducive to moderate training progression, leaning towards building a more robust base rather than pushing maximal efforts.
-- Avoid "Full Send" sessions for the immediate future. Instead, focus on consistent, moderate-intensity aerobic work (e.g., Zone 2-3 heart rate, 30-60 minutes, 3-4 times per week) to enhance cardiovascular fitness without overly taxing your system.
-- Integrate 2-3 sessions of light to moderate strength training to build resilience and muscle mass. Prioritize proper form and controlled movements over heavy loads.
-- Active Recovery Days: On days without structured workouts, maintain a minimum of 5,000-7,000 steps through light walks or gentle movement to promote circulation and aid recovery, rather than extreme sedentary periods.
-
-Sleep Targets:
-- Priority One: Elevate your sleep quantity and quality to optimal levels. Target a consistent 7.5 to 8.5 hours of high-quality sleep nightly.
-- Sleep Hygiene Optimization:
-  - Strict Schedule: Go to bed and wake up at approximately the same time every day, including weekends, to regulate your circadian rhythm.
-  - Power Down Protocol: Implement a screen-free wind-down routine 60-90 minutes before bed, involving reading, light stretching, or mindfulness.
-  - Environment: Ensure your bedroom is completely dark, quiet, and cool (ideally 18-20°C / 64-68°F).
-- Deep & REM Focus: Actively monitor your Deep and REM sleep stages. If these remain low, consider biohacking strategies like:
-  - Magnesium L-threonate supplementation (consult a healthcare professional first).
-  - Avoiding heavy meals and alcohol close to bedtime.
-  - Using blue light blocking glasses in the evening.
-
-Stress Management:
-- While your average stress has improved, the persistent high 'Max Stress' scores suggest recurrent acute stressors. Develop proactive strategies to mitigate these peaks.
-- Daily Mindfulness/Meditation: Incorporate 10-15 minutes of guided meditation or breathwork into your daily routine, particularly in the morning or before high-stress periods.
-- Strategic Breaks: Schedule micro-breaks throughout your day to consciously de-stress and reset. Even 2-5 minutes of focused breathing can be highly effective.
-- Nature Exposure: Spend time outdoors, especially in natural environments, which has been shown to significantly reduce physiological stress markers.
-
-Addressing SpO2 – Urgent Medical Consultation:
-- The most critical action point is to immediately consult with a medical professional (e.g., your primary care physician or a sleep specialist) regarding the consistently low minimum SpO2 values during sleep.
-- These dips below 90% (and even into the low 80s) are a strong indicator of potential sleep-disordered breathing (e.g., sleep apnea). This condition can have serious long-term health consequences and profoundly impair recovery. A formal sleep study (polysomnography) is highly recommended for diagnosis and appropriate management. Do not delay this step.
-
-Nutrition & Hydration:
-- Consistent Hydration: Maintain excellent hydration throughout the day, aiming for ample water intake, especially on active days.
-- Nutrient-Dense Diet: Focus on a balanced diet rich in whole foods, lean proteins, healthy fats, and complex carbohydrates to support energy demands, muscle repair, and overall cellular function. Consider consuming a nutrient-dense snack shortly after moderate exercise to aid recovery.
-
-By diligently implementing these guidelines, you will be leveraging your body's observed capacity for recovery while proactively addressing the identified physiological stressors and potential health concerns. This comprehensive approach will set the foundation for enhanced performance, well-being, and sustained health.
 Do not output HTML, only clean Markdown.
 """
 
@@ -312,6 +282,189 @@ Do not output HTML, only clean Markdown.
         ) from e
 
     return report_text
+
+
+def _parse_action_plan(text: str) -> tuple[str, list[str]]:
+    """
+    Pulls the machine-readable pieces (headline, watch-list items) out of the
+    model's markdown response. Falls back to empty values if the model didn't
+    follow the requested structure exactly — the raw text is always saved
+    regardless, so nothing is lost even if parsing comes up short.
+    """
+    import re
+
+    headline = ""
+    headline_match = re.search(r"^\s*HEADLINE:\s*(.+?)\s*$", text, re.MULTILINE)
+    if headline_match:
+        headline = headline_match.group(1).strip()
+
+    watchlist: list[str] = []
+    watchlist_match = re.search(
+        r"\*\*Watch List for Next Check-In\*\*\s*\n(.*)", text, re.IGNORECASE | re.DOTALL
+    )
+    if watchlist_match:
+        for line in watchlist_match.group(1).splitlines():
+            line = line.strip().lstrip("-*").strip()
+            if line:
+                watchlist.append(line)
+
+    return headline, watchlist
+
+
+def generate_action_plan(days: int = 7, model_override: str = None) -> dict:
+    """
+    Generates a forward-looking action plan (as opposed to generate_weekly_report's
+    recap) for the next period, saves it to the action_plans table, and returns
+    {"headline": str, "plan_text": str, "watchlist": list[str], "id": int}.
+
+    If a prior plan exists, its watch-list is fed back into the prompt so this
+    plan can explicitly follow up on it (resolved / improved / unchanged /
+    worsened, with the number) instead of starting from a blank slate each time.
+    """
+    model_to_use = model_override if model_override else weekly_model
+
+    current_api_key = api_key
+    current_base_url = base_url
+    if model_to_use and model_to_use.startswith("deepseek"):
+        current_api_key = os.environ.get("DEEPSEEK_API_KEY") or current_api_key
+        current_base_url = "https://api.deepseek.com"
+    elif model_to_use and model_to_use.startswith("gemini"):
+        current_api_key = os.environ.get("GEMINI_API_KEY") or current_api_key
+        current_base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+
+    if not current_api_key:
+        raise ValueError(f"No API key found for model {model_to_use}. Please set GEMINI_API_KEY or DEEPSEEK_API_KEY in .env")
+
+    dynamic_client = OpenAI(api_key=current_api_key, base_url=current_base_url)
+
+    df = db.get_df(limit=days)
+    if df.empty:
+        raise AIReportGenerationError("No data in database to generate an action plan.")
+
+    period_start = str(df.iloc[0]["date"])
+    period_end = str(df.iloc[-1]["date"])
+
+    metrics_block, trend_block = _build_metrics_block(df, include_extended=True)
+
+    previous_plan = db.get_latest_action_plan()
+    if previous_plan and previous_plan.get("watchlist"):
+        watchlist_lines = "\n".join(f"- {item}" for item in previous_plan["watchlist"])
+        previous_watchlist_block = f"""\
+LAST PERIOD'S WATCH LIST (from the plan generated {previous_plan['generated_at']}):
+{watchlist_lines}
+
+In the "What Changed" section, explicitly address each item above: say whether the
+data now shows it resolved, improved, unchanged, or worsened, citing the number.
+"""
+    else:
+        previous_watchlist_block = ""
+
+    prompt = f"""\
+You are a sports-science coach producing an ACTION PLAN for the next {days} days,
+not a narrative recap. Every claim must trace back to a specific number below —
+if you can't point to a number, don't say it.
+
+DATA (last {days} days):
+{metrics_block}
+
+{trend_block}
+
+{previous_watchlist_block}
+STRICT RULES:
+
+1. Every claim must trace back to a specific number above. If you use a word like
+   "concerning" or "critical," show the numbers that justify it.
+
+2. Calibrate confidence to sample size. Call something a "trend" only if it holds
+   across 3+ consecutive days, and prefer the precomputed rolling averages above
+   over eyeballing single-day deltas.
+
+3. Sensor and metric limitations — apply these before interpreting:
+   - Minimum SpO2 from a wrist device is frequently a motion/sensor artifact, especially
+     as a single-night low. Only raise SpO2 as noteworthy if the minimum drops below 90%
+     on multiple nights. Never use diagnostic language ("sleep apnea," "breathing disorder").
+     At most: "worth mentioning to a doctor if this repeats."
+   - "Training Readiness: None" or 0/100 with no other signal is almost always a
+     data-availability issue, not a physiological finding. State this plainly.
+   - A high "Max Stress" value in isolation (spikes to 90+) is common and usually not
+     meaningful. Only flag stress if the AVERAGE is elevated for 2+ consecutive days.
+
+4. No generic filler advice (hydration, "eat whole foods," "spend time in nature", etc.)
+   unless a specific number in this period's data justifies mentioning it.
+
+5. No medical claims or diagnoses. Frame any health flag as "worth mentioning to a
+   doctor," never stronger.
+
+6. Tone: direct, calm, and precise. Avoid dramatic language unless a number
+   genuinely warrants it. Bias toward under-alarming — a false alarm costs more
+   trust than a missed catch, especially from a non-medical-grade wrist sensor.
+
+7. Every action in "This Period's Actions" must open with the specific number
+   that justifies it (e.g. "Cap training at Zone 2 through Thursday — RHR has
+   run +4bpm above your weekly baseline for 4 straight nights"), not generic
+   advice that could apply to anyone.
+
+Structure your response EXACTLY like this — use **bold** section labels, not
+# headers, so it renders correctly in both a markdown viewer and Telegram:
+
+HEADLINE: <one sentence readiness verdict, must cite a specific number>
+
+**What Changed**
+<data-grounded patterns, same discipline as above; if a prior watch-list was
+given, explicitly follow up on each item first>
+
+**This Period's Actions**
+<3-5 bullets, each opening with the number that justifies it. Skip any topic
+(training, sleep, stress, recovery) with nothing data-driven to say.>
+
+**Watch List for Next Check-In**
+<1-2 bullets: an exact metric + threshold to track before the next plan,
+phrased so it can be checked directly against next period's data>
+
+Do not output HTML, only clean Markdown.
+"""
+
+    try:
+        response = dynamic_client.chat.completions.create(
+            model=model_to_use,
+            messages=[
+                {"role": "user", "content": prompt.strip()}
+            ],
+            temperature=0.3,
+            max_tokens=8192,
+        )
+    except Exception as e:
+        raise AIReportGenerationError(
+            f"AI Coach model request failed before an action plan was generated. Reason: {e}"
+        ) from e
+
+    try:
+        plan_text = response.choices[0].message.content.strip()
+    except (AttributeError, IndexError, TypeError) as e:
+        raise AIReportGenerationError(
+            "AI Coach returned an unexpected response format, so no action plan could be read."
+        ) from e
+
+    if not plan_text:
+        raise AIReportGenerationError("AI Coach returned an empty action plan.")
+
+    headline, watchlist = _parse_action_plan(plan_text)
+
+    try:
+        plan_id = db.save_action_plan(
+            period_start=period_start,
+            period_end=period_end,
+            model=model_to_use,
+            headline=headline,
+            plan_text=plan_text,
+            watchlist=watchlist,
+        )
+    except Exception as e:
+        raise AIReportGenerationError(
+            f"AI Coach generated an action plan, but saving it failed. Reason: {e}"
+        ) from e
+
+    return {"id": plan_id, "headline": headline, "plan_text": plan_text, "watchlist": watchlist}
 
 
 def generate_morning_briefing(days: int = 3) -> str:
