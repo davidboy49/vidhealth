@@ -18,9 +18,18 @@ from recovery_predictor import RecoveryPredictor
 st.set_page_config(page_title="My Health", page_icon="⚡", layout="wide")
 
 # ---------- THEME CONFIGURATION (SHADCN STYLING) ----------
-# FIRST PRIORITY: Default to Dark mode
+# Default to whatever Streamlit's own active theme already is (the viewer's
+# browser/OS preference, or their prior choice in the ⋮ menu). That's the
+# theme every native widget already renders in — st.dataframe in particular
+# can't be restyled by our injected CSS below, so a hardcoded default (light
+# or dark) used to fight the real one and show a mismatched table on first
+# load for whichever viewers didn't happen to match the hardcoded guess.
+# st.context.theme.type only reflects the theme as of this connection, so it
+# won't chase a mid-session native-menu change without a full reload — that's
+# a Streamlit platform limit, not something fixable here. See the toggle
+# button below for how a same-session override behaves.
 if "theme" not in st.session_state:
-    st.session_state.theme = "dark"
+    st.session_state.theme = st.context.theme.type or "dark"
 
 # Apply CSS variables matching Shadcn UI design tokens
 if st.session_state.theme == "dark":
@@ -340,7 +349,9 @@ with cols_header[2]:
     if st.button(
         "Light" if st.session_state.theme == "dark" else "Dark",
         use_container_width=True,
-        help="Switch dashboard theme.",
+        help="Switch the page's own colors. Interactive tables and other native "
+             "widgets follow your browser/OS theme instead — use the ⋮ menu → "
+             "Settings → Theme, then reload, if you want those to match too.",
     ):
         st.session_state.theme = "light" if st.session_state.theme == "dark" else "dark"
         st.rerun()
