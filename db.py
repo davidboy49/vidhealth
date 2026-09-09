@@ -143,8 +143,15 @@ CREATE TABLE IF NOT EXISTS daily_metrics (
     alcohol_logged      INTEGER DEFAULT 0,
     sleep_apnea_flag    INTEGER DEFAULT 0,
     ai_summary          TEXT,
-    raw_json            TEXT
+    raw_json            TEXT,
+    synced_at           TIMESTAMPTZ
 );
+
+-- synced_at was added to save_day()'s INSERT after this table had already
+-- been created on some databases (via a manual ALTER, not through init_db()).
+-- This keeps a fresh install and an already-existing table converging on the
+-- same schema instead of only the manually-patched database having the column.
+ALTER TABLE daily_metrics ADD COLUMN IF NOT EXISTS synced_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS body_comp (
     date        TEXT PRIMARY KEY,
@@ -395,8 +402,8 @@ def save_day(date_str: str, raw_data: dict):
         date, hrv_last_night, hrv_weekly_avg, hrv_status, sleep_score, sleep_duration,
         sleep_deep, sleep_light, sleep_rem, sleep_awake, resting_hr, min_hr, max_hr,
         bb_max, bb_min, bb_charged, bb_drained, stress_avg, stress_max, steps, floors,
-        training_readiness, spo2_avg, spo2_min, respiration_avg, respiration_min, raw_json
-    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        training_readiness, spo2_avg, spo2_min, respiration_avg, respiration_min, raw_json, synced_at
+    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
     ON CONFLICT(date) DO UPDATE SET
         hrv_last_night = excluded.hrv_last_night,
         hrv_weekly_avg = excluded.hrv_weekly_avg,
@@ -423,7 +430,8 @@ def save_day(date_str: str, raw_data: dict):
         spo2_min = excluded.spo2_min,
         respiration_avg = excluded.respiration_avg,
         respiration_min = excluded.respiration_min,
-        raw_json = excluded.raw_json
+        raw_json = excluded.raw_json,
+        synced_at = NOW()
     """, (
         date_str, hrv_last_night, hrv_weekly_avg, hrv_status, sleep_score, sleep_duration,
         sleep_deep, sleep_light, sleep_rem, sleep_awake, resting_hr, min_hr, max_hr,
@@ -592,6 +600,16 @@ def delete_activity_log(log_id: int) -> bool:
     return deleted
 
 # ---------- ANOMALY ALERTS ----------
+
+def delete_anomaly_alert(date_str: str, alert_type: str) -> None:
+    """Removes a previously-saved alert for (date, alert_type) — used to replace stale alerts."""
+    init_db()
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM anomaly_alerts WHERE date = %s AND alert_type = %s", (date_str, alert_type))
+    conn.commit()
+    conn.close()
+
 
 def save_anomaly_alert(date_str: str, severity: str, alert_type: str, message: str, metrics_dict: dict | None = None) -> int:
     """
@@ -1167,8 +1185,8 @@ def backfill_spo2_epochs_if_needed():
         count = c.fetchone()[0]
         conn.close()
         
-        if count == 0:
-            raw_data = json.loads(raw_json_str) if raw_json_str else {}
+        if count == 0 and raw_json_str:
+            raw_data = json.loads(raw_json_str)
             process_and_save_spo2(date_str, raw_data)
 
 

@@ -21,14 +21,15 @@ st.set_page_config(page_title="My Health", page_icon="⚡", layout="wide")
 # Default to whatever Streamlit's own active theme already is (the viewer's
 # browser/OS preference, or their prior choice in the ⋮ menu). That's the
 # theme every native widget already renders in — st.dataframe in particular
-# can't be restyled by our injected CSS below, so a hardcoded "light" default
-# used to fight the real one and show a light table on a dark page (or vice
-# versa) on first load. st.context.theme.type only reflects the theme as of
-# this connection, so it won't chase a mid-session native-menu change without
-# a full reload — that's a Streamlit platform limit, not something fixable
-# here. See the toggle button below for how a same-session override behaves.
+# can't be restyled by our injected CSS below, so a hardcoded default (light
+# or dark) used to fight the real one and show a mismatched table on first
+# load for whichever viewers didn't happen to match the hardcoded guess.
+# st.context.theme.type only reflects the theme as of this connection, so it
+# won't chase a mid-session native-menu change without a full reload — that's
+# a Streamlit platform limit, not something fixable here. See the toggle
+# button below for how a same-session override behaves.
 if "theme" not in st.session_state:
-    st.session_state.theme = st.context.theme.type or "light"
+    st.session_state.theme = st.context.theme.type or "dark"
 
 # Apply CSS variables matching Shadcn UI design tokens
 if st.session_state.theme == "dark":
@@ -309,12 +310,20 @@ LUCIDE_DATABASE = '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18
 LUCIDE_SEARCH = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide-icon"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>'
 LUCIDE_DOWNLOAD = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide-icon"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>'
 
-# Get last sync time — most recent date with a daily_metrics row.
+# Get last sync time — actual sync timestamp (synced_at), fallback to date.
 last_sync_str = "Never"
 try:
     _latest = db.get_df(limit=1)
     if not _latest.empty:
-        last_sync_str = pd.to_datetime(_latest.iloc[-1]["date"]).strftime("%b %d, %Y")
+        _row = _latest.iloc[-1]
+        _synced = _row.get("synced_at")
+        if _synced is not None and not pd.isna(_synced):
+            _last = pd.to_datetime(_synced)
+            if _last.tzinfo is None:
+                _last = _last.tz_localize("UTC")
+            last_sync_str = _last.tz_convert("Asia/Phnom_Penh").strftime("%b %d, %Y %H:%M")
+        else:
+            last_sync_str = pd.to_datetime(_row["date"]).strftime("%b %d, %Y") + " (legacy)"
 except Exception:
     pass
 
@@ -461,7 +470,7 @@ def clean_text(value):
     text = str(value).strip()
     return "" if text.lower() in {"nan", "none", "nat", "<na>"} else text
 # ---------- TABS (EMOJI-LESS PLAIN TEXT HEADERS) ----------
-tab_today, tab_trends, tab_spo2, tab_activities, tab_comp, tab_ai, tab_recovery, tab_data = st.tabs([
+tab_today, tab_trends, tab_spo2, tab_activities, tab_comp, tab_ai, tab_recovery, tab_ent, tab_data = st.tabs([
     "Today", 
     "Trends", 
     "Oxygen & Respiration",
@@ -469,6 +478,7 @@ tab_today, tab_trends, tab_spo2, tab_activities, tab_comp, tab_ai, tab_recovery,
     "Body Comp",
     "AI Insights", 
     "Recovery Forecast",
+    "ENT",
     "Data"
 ])
 
@@ -799,7 +809,7 @@ with tab_today:
     with col_logs_add:
         with st.expander("➕ Quick Log Habit or Note", expanded=True):
             log_date_val = st.date_input("Entry Date", value=date.today())
-            log_type = st.selectbox("Category", ["😈 Unholy Habit", "📝 Free Note"], key="quick_log_cat")
+            log_type = st.selectbox("Category", ["😈 Unholy Habit", "💥 Master", "📝 Free Note"], key="quick_log_cat")
             
             if "Unholy Habit" in log_type:
                 habit_preset = st.selectbox(
@@ -815,14 +825,18 @@ with tab_today:
 
                 habit_val = st.number_input("Count / Units (e.g. drinks, minutes, mg)", min_value=0.5, max_value=500.0, value=1.0, step=0.5, key="quick_habit_val")
                 habit_note = st.text_input("Details / Note (optional)", placeholder="e.g. 20 mins @ 90°C or 2 pints IPA", key="quick_habit_note")
+            elif "Master" in log_type:
+                habit_tag = "master"
+                habit_val = st.number_input("Count", min_value=0.5, max_value=500.0, value=1.0, step=0.5, key="quick_master_val")
+                habit_note = st.text_input("Details / Note (optional)", key="quick_master_note")
             else:
                 habit_tag = "note"
                 habit_val = None
                 habit_note = st.text_area("Note Content", placeholder="e.g. Red eye flight, heavy squat session, feeling fatigued", key="quick_note_content")
             
             if st.button("Save Entry", key="quick_log_submit_btn", type="primary", use_container_width=True):
-                cat_key = "unholy_habit" if "Unholy Habit" in log_type else "free_note"
-                tag_key = habit_tag.lower().replace(" ", "_") if "Unholy Habit" in log_type else "note"
+                cat_key = "unholy_habit" if "Unholy Habit" in log_type else ("master" if "Master" in log_type else "free_note")
+                tag_key = habit_tag.lower().replace(" ", "_") if ("Unholy Habit" in log_type or "Master" in log_type) else "note"
                 entry_date_str = log_date_val.isoformat()
                 
                 db.log_activity(
@@ -2564,6 +2578,168 @@ with tab_recovery:
     st.plotly_chart(fig_forecast, use_container_width=True)
 
 
+# ==================== TAB: ENT TREATMENT TRACKER ====================
+with tab_ent:
+    ent_path = Path(__file__).parent.parent / "ent_tracking.md"
+    ent_text = ent_path.read_text(encoding="utf-8") if ent_path.exists() else ""
+
+    st.markdown("<h3 style='font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 6px;'>ENT — Chronic Rhinosinusitis Treatment</h3>", unsafe_allow_html=True)
+    st.markdown("<p style='font-size: 0.875rem; color: var(--muted-foreground); margin: 0 0 16px 0;'>Post-surgical recurrence tracking — breathing scores, medication adherence, and doctor's rules.</p>", unsafe_allow_html=True)
+
+    if not ent_text:
+        st.info("No ENT record yet. Record lives in /root/garmin-health/ent_tracking.md.")
+    else:
+        def _md_row(line: str) -> list[str]:
+            return [c.strip().replace("**", "") for c in line.strip().strip("|").split("|")]
+
+        record_facts: list[tuple[str, str]] = []
+        meds_rows: list[list[str]] = []
+        rules: list[str] = []
+        track_rows: list[list[str]] = []
+        section = ""
+        for raw in ent_text.splitlines():
+            ls = raw.strip()
+            if ls.startswith("## "):
+                section = ls[3:].lower()
+                continue
+            if not ls:
+                continue
+            if section.startswith("record") and ls.startswith("- **"):
+                label, _, val = ls[2:].partition(":**")
+                record_facts.append((label.strip("* ").strip(), val.strip()))
+            elif section.startswith("medication") and ls.startswith("|"):
+                if "Dose" in ls or ls.startswith("|---"):
+                    continue
+                meds_rows.append(_md_row(ls))
+            elif section.startswith("doctor") and ls.startswith("- "):
+                rules.append(ls[2:])
+            elif section.startswith("daily") and ls.startswith("|"):
+                if "Breathing" in ls or ls.startswith("|---"):
+                    continue
+                track_rows.append(_md_row(ls))
+
+        # Next-appointment countdown
+        appt_str = next((v for k, v in record_facts if "appointment" in k.lower()), "")
+        appt_days = None
+        if appt_str:
+            try:
+                appt_date = datetime.strptime(appt_str.strip(), "%Y-%m-%d").date()
+                appt_days = (appt_date - date.today()).days
+            except ValueError:
+                pass
+
+        if appt_days is not None:
+            if appt_days < 0:
+                appt_badge = f"<span style='color:{STATUS_GOOD};'>follow-up passed ({appt_str})</span>"
+            elif appt_days == 0:
+                appt_badge = f"<span style='color:{STATUS_CRITICAL}; font-weight:700;'>APPOINTMENT TODAY ({appt_str})</span>"
+            elif appt_days <= 2:
+                appt_badge = f"<span style='color:{STATUS_WARNING}; font-weight:700;'>appointment in {appt_days}d ({appt_str})</span>"
+            else:
+                appt_badge = f"<span style='color:var(--muted-foreground);'>next appointment: {appt_str} ({appt_days}d)</span>"
+            st.markdown(f"<div style='font-size:0.875rem; margin-bottom:12px;'>{appt_badge}</div>", unsafe_allow_html=True)
+
+        # Record fact chips
+        chips_html = "".join(
+            f"<div style='background-color:var(--card); border:1px solid var(--border); border-radius:8px; padding:8px 14px;'>"
+            f"<div style='font-size:0.7rem; text-transform:uppercase; letter-spacing:0.04em; color:var(--muted-foreground);'>{k}</div>"
+            f"<div style='font-size:0.9rem; font-weight:600; margin-top:2px;'>{v}</div></div>"
+            for k, v in record_facts
+        )
+        st.markdown(f"<div style='display:flex; flex-wrap:wrap; gap:8px; margin-bottom:18px;'>{chips_html}</div>", unsafe_allow_html=True)
+
+        # Doctor's rules — NO-list highlighted
+        no_items = [r for r in rules if "NO" in r.upper() or "avoid" in r.lower()]
+        rule_chips = ""
+        for r in rules:
+            is_no = r.upper().startswith("NO") or "NO " in r.upper()
+            col = STATUS_CRITICAL if ("alcohol" in r.lower()) else (STATUS_WARNING if is_no else "var(--muted-foreground)")
+            rule_chips += f"<span style='display:inline-block; background-color:var(--card); border:1px solid {col}; color:{col}; border-radius:999px; padding:3px 12px; font-size:0.8rem; font-weight:600; margin:0 6px 6px 0;'>{r}</span>"
+        if rule_chips:
+            st.markdown(f"<div style='margin-bottom:18px;'><div style='font-size:0.7rem; text-transform:uppercase; letter-spacing:0.04em; color:var(--muted-foreground); margin-bottom:6px;'>Doctor's rules</div>{rule_chips}</div>", unsafe_allow_html=True)
+
+        # Medication course table
+        meds_html = "".join(
+            f"<tr><td style='padding:6px 10px; border-bottom:1px solid var(--border); font-size:0.85rem;'>{r[0]}</td>"
+            f"<td style='padding:6px 10px; border-bottom:1px solid var(--border); font-size:0.85rem; color:var(--muted-foreground);'>{r[1]}</td>"
+            f"<td style='padding:6px 10px; border-bottom:1px solid var(--border); font-size:0.85rem;'>{r[2] if len(r) > 2 else ''}</td></tr>"
+            for r in meds_rows
+        )
+        st.markdown(f"<div style='background-color:var(--card); border:1px solid var(--border); border-radius:10px; padding:14px 16px; margin-bottom:18px;'>"
+                    f"<div style='font-size:0.7rem; text-transform:uppercase; letter-spacing:0.04em; color:var(--muted-foreground); margin-bottom:8px;'>Medication course (started 2026-09-04)</div>"
+                    f"<table style='width:100%; border-collapse:collapse;'><thead><tr>"
+                    f"<th style='text-align:left; padding:6px 10px; font-size:0.75rem; text-transform:uppercase; color:var(--muted-foreground);'>Med</th>"
+                    f"<th style='text-align:left; padding:6px 10px; font-size:0.75rem; text-transform:uppercase; color:var(--muted-foreground);'>Dose</th>"
+                    f"<th style='text-align:left; padding:6px 10px; font-size:0.75rem; text-transform:uppercase; color:var(--muted-foreground);'>When</th>"
+                    f"</tr></thead><tbody>{meds_html}</tbody></table></div>", unsafe_allow_html=True)
+
+        # Tracking table + summary
+        track_html = ""
+        for r in track_rows:
+            cells = r + [""] * (4 - len(r))
+            date_cell, score_cell, meds_cell, note_cell = cells[:4]
+            try:
+                score_val = int(score_cell.strip().split("/")[0])
+            except (ValueError, AttributeError):
+                score_val = 0
+            score_color = STATUS_GOOD if score_val >= 7 else (STATUS_WARNING if score_val >= 5 else STATUS_CRITICAL)
+            meds_color = STATUS_GOOD if meds_cell.lower() == "yes" else ("var(--muted-foreground)" if meds_cell in ("?", "") else STATUS_CRITICAL)
+            track_html += (
+                f"<tr><td style='padding:6px 10px; border-bottom:1px solid var(--border); font-size:0.85rem; white-space:nowrap;'>{date_cell}</td>"
+                f"<td style='padding:6px 10px; border-bottom:1px solid var(--border);'><span style='font-size:0.95rem; font-weight:800; color:{score_color};'>{score_val}/10</span></td>"
+                f"<td style='padding:6px 10px; border-bottom:1px solid var(--border); font-size:0.85rem; color:{meds_color}; font-weight:600;'>{meds_cell or '—'}</td>"
+                f"<td style='padding:6px 10px; border-bottom:1px solid var(--border); font-size:0.8rem; color:var(--muted-foreground);'>{note_cell}</td></tr>"
+            )
+
+        scores = []
+        adherence_ok = 0
+        adherence_total = 0
+        for r in track_rows:
+            try:
+                scores.append(int(r[1].strip().split("/")[0]))
+            except (ValueError, IndexError):
+                pass
+            meds_cell = r[2].lower() if len(r) > 2 else ""
+            if meds_cell not in ("", "?"):
+                adherence_total += 1
+                if meds_cell == "yes":
+                    adherence_ok += 1
+
+        if scores:
+            baseline, latest = scores[0], scores[-1]
+            delta = latest - baseline
+            delta_html = (f"<span style='color:{STATUS_GOOD}; font-weight:700;'>▲ +{delta}</span>" if delta > 0
+                          else f"<span style='color:{STATUS_WARNING}; font-weight:700;'>▼ {delta}</span>" if delta < 0
+                          else "<span style='color:var(--muted-foreground);'>— 0</span>")
+            adh_html = (f"<span style='color:{STATUS_GOOD}; font-weight:700;'>{adherence_ok}/{adherence_total} days</span>"
+                        if adherence_total else "<span style='color:var(--muted-foreground);'>pending</span>")
+            summary_cards = (
+                f"<div style='background-color:var(--card); border:1px solid var(--border); border-radius:10px; padding:12px 18px;'>"
+                f"<div style='font-size:0.7rem; text-transform:uppercase; letter-spacing:0.04em; color:var(--muted-foreground);'>Baseline</div>"
+                f"<div style='font-size:1.4rem; font-weight:800;'>{baseline}<span style='font-size:0.9rem; color:var(--muted-foreground);'>/10</span></div></div>"
+                f"<div style='background-color:var(--card); border:1px solid var(--border); border-radius:10px; padding:12px 18px;'>"
+                f"<div style='font-size:0.7rem; text-transform:uppercase; letter-spacing:0.04em; color:var(--muted-foreground);'>Latest</div>"
+                f"<div style='font-size:1.4rem; font-weight:800;'>{latest}<span style='font-size:0.9rem; color:var(--muted-foreground);'>/10</span></div></div>"
+                f"<div style='background-color:var(--card); border:1px solid var(--border); border-radius:10px; padding:12px 18px;'>"
+                f"<div style='font-size:0.7rem; text-transform:uppercase; letter-spacing:0.04em; color:var(--muted-foreground);'>Change</div>"
+                f"<div style='font-size:1.4rem; font-weight:800;'>{delta_html}</div></div>"
+                f"<div style='background-color:var(--card); border:1px solid var(--border); border-radius:10px; padding:12px 18px;'>"
+                f"<div style='font-size:0.7rem; text-transform:uppercase; letter-spacing:0.04em; color:var(--muted-foreground);'>Meds adherence</div>"
+                f"<div style='font-size:1.4rem; font-weight:800;'>{adh_html}</div></div>"
+            )
+            st.markdown(f"<div style='display:flex; flex-wrap:wrap; gap:10px; margin-bottom:16px;'>{summary_cards}</div>", unsafe_allow_html=True)
+
+        empty_row = "<tr><td colspan=4 style='padding:10px; font-size:0.85rem; color:var(--muted-foreground);'>No entries yet</td></tr>"
+        st.markdown(f"<div style='background-color:var(--card); border:1px solid var(--border); border-radius:10px; padding:14px 16px;'>"
+                    f"<div style='font-size:0.7rem; text-transform:uppercase; letter-spacing:0.04em; color:var(--muted-foreground); margin-bottom:8px;'>Daily tracking</div>"
+                    f"<table style='width:100%; border-collapse:collapse;'><thead><tr>"
+                    f"<th style='text-align:left; padding:6px 10px; font-size:0.75rem; text-transform:uppercase; color:var(--muted-foreground);'>Date</th>"
+                    f"<th style='text-align:left; padding:6px 10px; font-size:0.75rem; text-transform:uppercase; color:var(--muted-foreground);'>Breathing</th>"
+                    f"<th style='text-align:left; padding:6px 10px; font-size:0.75rem; text-transform:uppercase; color:var(--muted-foreground);'>Meds</th>"
+                    f"<th style='text-align:left; padding:6px 10px; font-size:0.75rem; text-transform:uppercase; color:var(--muted-foreground);'>Notes</th>"
+                    f"</tr></thead><tbody>{track_html or empty_row}</tbody></table></div>", unsafe_allow_html=True)
+
+
 # ==================== TAB 6: RECORDED DATA EXPLORER ====================
 with tab_data:
     st.markdown(f"<h3 style='font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 6px; display: flex; align-items: center;'>{LUCIDE_DATABASE} Recorded Data Explorer</h3>", unsafe_allow_html=True)
@@ -2912,7 +3088,7 @@ with tab_data:
             with col_log_table:
                 display_logs = logs_df.copy().sort_values("timestamp", ascending=False)
                 display_logs["tag"] = display_logs["tag"].str.replace("_", " ").str.title()
-                display_logs["category"] = display_logs["category"].map({"unholy_habit": "Unholy Habit", "free_note": "Free Note"}).fillna(display_logs["category"])
+                display_logs["category"] = display_logs["category"].map({"unholy_habit": "Unholy Habit", "master": "Master", "free_note": "Free Note"}).fillna(display_logs["category"])
                 st.dataframe(
                     display_logs.rename(columns={
                         "id": "ID", "date": "Date", "timestamp": "Timestamp",

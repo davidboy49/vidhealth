@@ -1,7 +1,9 @@
 import os
 import sys
+import json
 import logging
 import html
+import subprocess
 from pathlib import Path
 from datetime import datetime, date, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -66,6 +68,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Here are the available commands:\n"
         "🔄 /sync - Smart sync Garmin data (e.g. `/sync` or `/sync 7`)\n"
         "✍️ /log - Interactive daily activity & unholy habit logger\n"
+        "💥 /master - Log Master (optional qty, e.g. `/master 2`)\n"
         "📊 /health - Today's health metrics snapshot\n"
         "🧠 /insights - Biometric intelligence & HRV baseline bands\n"
         "🫁 /spo2 - Nocturnal SpO2 & desaturation drops analysis\n"
@@ -430,6 +433,9 @@ def get_unholy_habits_keyboard():
             InlineKeyboardButton("⚡ High Mental Stress", callback_data="log_habit:mental_stress:1:High Mental Stress")
         ],
         [
+            InlineKeyboardButton("💥 Master", callback_data="log_habit:master:1:Master")
+        ],
+        [
             InlineKeyboardButton("🔙 Back to Main Menu", callback_data="menu_main")
         ]
     ])
@@ -445,6 +451,69 @@ def get_alcohol_keyboard():
             InlineKeyboardButton("🔙 Back to Habits", callback_data="menu_unholy")
         ]
     ])
+
+async def master_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """💥 /master [qty] — log Master as its own category. No judgment, data only."""
+    qty = 1.0
+    if context.args:
+        try:
+            qty = float(context.args[0].replace(",", "."))
+        except (ValueError, IndexError):
+            qty = 1.0
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    db.log_activity(
+        date_str=today_str,
+        category="master",
+        tag="master",
+        note="",
+        value=qty
+    )
+    await update.message.reply_text(
+        f"💥 <b>Master logged</b> ({qty}) for <code>{today_str}</code>.\n"
+        f"Hermes Coach will correlate this with tomorrow's HRV — no judgment, data only.\n\n"
+        f"⚡ <b>Redirect:</b> that urge was fuel. Spend it first: <b>50 pushups</b> / cold shower / 10-min sprint. "
+        f"Still want it after? Your call. But the 7-day man you met — he runs on this energy, not off it.",
+        parse_mode="HTML"
+    )
+
+
+async def xlsx_statement_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Import an ABA .xlsx bank statement into Sure (auto bank-statement import)."""
+    if not await check_auth(update, context):
+        return
+    doc = update.message.document
+    fname = (doc.file_name or "").lower()
+    if not fname.endswith(".xlsx"):
+        await update.message.reply_text("Send an ABA bank statement (.xlsx) to import into Sure.")
+        return
+    path = f"/tmp/statement_{doc.file_id[:10]}.xlsx"
+    try:
+        f = await context.bot.get_file(doc.file_id)
+        await f.download_to_drive(path)
+    except Exception as e:
+        await update.message.reply_text(f"❌ Could not download file: {e}")
+        return
+    await update.message.reply_text("📥 Importing statement into Sure…")
+    proc = None
+    try:
+        proc = subprocess.run(
+            ["/root/sure_import/venv/bin/python", "/root/sure_import/bank_statement_import.py", path],
+            capture_output=True, text=True, timeout=180,
+        )
+        summary = json.loads(proc.stdout.strip().splitlines()[-1])
+    except Exception:
+        summary = {"error": (proc.stderr.strip() or proc.stdout.strip())[-300:] if 'proc' in dir() else "subprocess failed"}
+    if "error" in summary:
+        await update.message.reply_text(f"❌ Import failed: {summary['error']}")
+    else:
+        await update.message.reply_text(
+            f"✅ <b>Sure import done</b>\n"
+            f"• Imported: <b>{summary.get('rows_imported', 0)}</b>\n"
+            f"• Already existed (skipped): {summary.get('rows_skipped_dupe', 0)}\n"
+            f"• Failed: {summary.get('rows_failed', 0)}",
+            parse_mode="HTML",
+        )
+
 
 async def log_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_auth(update, context):
@@ -797,6 +866,8 @@ def main():
     # Handlers
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("log", log_command))
+    app.add_handler(CommandHandler("master", master_command))
+    app.add_handler(MessageHandler(filters.Document.FileExtension("xlsx"), xlsx_statement_handler))
     app.add_handler(CommandHandler("note", note_command))
     app.add_handler(CommandHandler("habit", habit_command))
     app.add_handler(CommandHandler("notes", notes_command))
