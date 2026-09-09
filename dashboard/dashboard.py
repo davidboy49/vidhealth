@@ -110,9 +110,12 @@ st.markdown(f"""
         border-color: var(--border) !important;
     }}
 
-    /* Hide Streamlit default headers completely to avoid sticky color mismatches */
+    /* Keep the header bar (it holds the MainMenu button — the only way to
+       reach Settings -> Theme now that there's no in-page toggle), but match
+       its background to the current theme instead of Streamlit's default so
+       it doesn't show as a jarring sticky-colored strip. */
     header[data-testid="stHeader"] {{
-        display: none !important;
+        background-color: var(--background) !important;
     }}
     
     div[data-testid="stDecoration"] {{
@@ -128,7 +131,9 @@ st.markdown(f"""
         color: var(--foreground) !important;
     }}
 
-    #MainMenu {{visibility: hidden;}}
+    /* MainMenu (the ⋮ menu) stays visible: it's the only way to reach
+       Settings -> Theme now that there's no in-page toggle, and Streamlit's
+       real theme is what actually controls native widgets like tables. */
     footer {{visibility: hidden;}}
 
     /* Loading overlay */
