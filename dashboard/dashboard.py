@@ -18,18 +18,21 @@ from recovery_predictor import RecoveryPredictor
 st.set_page_config(page_title="My Health", page_icon="⚡", layout="wide")
 
 # ---------- THEME CONFIGURATION (SHADCN STYLING) ----------
-# Default to whatever Streamlit's own active theme already is (the viewer's
-# browser/OS preference, or their prior choice in the ⋮ menu). That's the
-# theme every native widget already renders in — st.dataframe in particular
-# can't be restyled by our injected CSS below, so a hardcoded default (light
-# or dark) used to fight the real one and show a mismatched table on first
-# load for whichever viewers didn't happen to match the hardcoded guess.
-# st.context.theme.type only reflects the theme as of this connection, so it
-# won't chase a mid-session native-menu change without a full reload — that's
-# a Streamlit platform limit, not something fixable here. See the toggle
-# button below for how a same-session override behaves.
-if "theme" not in st.session_state:
-    st.session_state.theme = st.context.theme.type or "dark"
+# Always mirror Streamlit's own active theme (the viewer's browser/OS
+# preference, or their choice in the ⋮ menu) rather than an independent
+# toggle. st.dataframe and other native widgets (selectbox, text_input,
+# date_input, ...) are rendered by Streamlit itself and can't be restyled by
+# our injected CSS below — their colors come from Streamlit's real theme, a
+# system entirely separate from any session_state flag this script sets.
+# An in-page toggle button used to let the two drift apart: clicking it
+# changed our CSS without changing Streamlit's real theme, leaving the table
+# and other native widgets on whichever theme was already active — a jarring
+# mismatch, not a working override. There's no supported way to change
+# Streamlit's real theme from a running script, so deriving from
+# st.context.theme.type on every run (instead of a one-time session_state
+# default plus a button) is the only way to guarantee this page never
+# disagrees with what native widgets are already showing.
+st.session_state.theme = st.context.theme.type or "dark"
 
 # Apply CSS variables matching Shadcn UI design tokens
 if st.session_state.theme == "dark":
@@ -328,7 +331,11 @@ except Exception:
     pass
 
 # Header Row (now inherits correct variables)
-cols_header = st.columns([7, 1.5, 1])
+# No in-page theme toggle: the page's colors always mirror Streamlit's own
+# active theme (set above from st.context.theme.type), so switching theme
+# for real — including native widgets like tables, dropdowns, and inputs —
+# is Streamlit's own ⋮ menu -> Settings -> Theme, then reload.
+cols_header = st.columns([7, 1.5])
 with cols_header[0]:
     st.markdown(f"""
         <div style="margin-bottom: 20px;">
@@ -345,16 +352,6 @@ with cols_header[1]:
         use_container_width=True,
         help="Fetch today's latest Garmin metrics and update the dashboard.",
     )
-with cols_header[2]:
-    if st.button(
-        "Light" if st.session_state.theme == "dark" else "Dark",
-        use_container_width=True,
-        help="Switch the page's own colors. Interactive tables and other native "
-             "widgets follow your browser/OS theme instead — use the ⋮ menu → "
-             "Settings → Theme, then reload, if you want those to match too.",
-    ):
-        st.session_state.theme = "light" if st.session_state.theme == "dark" else "dark"
-        st.rerun()
 
 sync_error = None
 if sync_clicked:
