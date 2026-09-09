@@ -77,6 +77,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "💪 /gym - Today's dynamic gym plan recommendation\n"
         "🔮 /recover - Predictive recovery projection\n"
         "📝 /week - Latest AI coaching weekly summary\n"
+        "📋 /actionplan - Latest forward-looking action plan & watch-list\n"
         "❓ /status - Quick biometric readiness update\n\n"
         "💡 *Tip: You can also send me any plain text message to log a quick Free Note!*"
     )
@@ -210,6 +211,30 @@ async def week_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(chunk, parse_mode="Markdown")
     else:
         await update.message.reply_text(f"📝 **AI Coach Weekly Coaching Report**\n\n{ai_summary}", parse_mode="Markdown")
+
+async def actionplan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_auth(update, context):
+        return
+
+    plan = db.get_latest_action_plan()
+    if not plan:
+        await update.message.reply_text(
+            "📋 No action plan generated yet.\n"
+            "Generate one from the Web Dashboard's AI Insights tab (Coach Type: Action Plan)."
+        )
+        return
+
+    header = f"📋 **Action Plan** ({plan.get('period_start', '')} to {plan.get('period_end', '')})\n"
+    if plan.get("headline"):
+        header += f"_{plan['headline']}_\n"
+    body = f"{header}\n{plan['plan_text']}"
+
+    # Split message if it exceeds Telegram's 4096 char limit
+    if len(body) > 4000:
+        for chunk in [body[i:i+4000] for i in range(0, len(body), 4000)]:
+            await update.message.reply_text(chunk, parse_mode="Markdown")
+    else:
+        await update.message.reply_text(body, parse_mode="Markdown")
 
 async def recover_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_auth(update, context):
@@ -851,6 +876,7 @@ def main():
     app.add_handler(CommandHandler("health", health_command))
     app.add_handler(CommandHandler("gym", gym_command))
     app.add_handler(CommandHandler("week", week_command))
+    app.add_handler(CommandHandler("actionplan", actionplan_command))
     app.add_handler(CommandHandler("recover", recover_command))
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("spo2", spo2_command))
