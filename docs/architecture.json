@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Hermes Health Tracker",
+    "output": "vidhealth-architecture.html",
+    "quality_profile": "showcase",
+    "views": [
+      { "id": "sync-path", "label": "Garmin sync path", "focus": ["garmin_api", "sync", "postgres"], "note": "Every 3 hours a systemd timer runs sync.py, which pulls from Garmin Connect and upserts 9 Postgres tables." },
+      { "id": "surfaces", "label": "User-facing surfaces", "focus": ["postgres", "dashboard", "bot", "user"], "note": "The Streamlit dashboard and Telegram bot both read and write the same Postgres instance directly through db.py." },
+      { "id": "ai-coach-loop", "label": "AI coach loop", "focus": ["postgres", "ai_coach", "llm_api"], "note": "The AI coach reads a rolling window of metrics, calls an LLM provider, and writes the recap or action plan back to Postgres." }
+    ]
+  },
+  "components": [
+    { "id": "garmin_api", "type": "external", "label": "Garmin Connect", "sublabel": "REST API", "pos": [40, 260], "size": [140, 60] },
+    { "id": "sync", "type": "backend", "label": "sync.py", "sublabel": "systemd timer · 3h", "pos": [260, 260], "size": [150, 60] },
+    { "id": "postgres", "type": "database", "label": "PostgreSQL", "sublabel": "9 tables · health", "pos": [500, 250], "size": [160, 70] },
+    { "id": "anomaly_detector", "type": "backend", "label": "anomaly_detector.py", "sublabel": "scans for flags", "pos": [500, 100], "size": [160, 60] },
+    { "id": "ai_coach", "type": "backend", "label": "ai_coach.py", "sublabel": "recap + action plan", "pos": [500, 400], "size": [160, 60] },
+    { "id": "llm_api", "type": "external", "label": "Gemini / DeepSeek", "sublabel": "LLM provider", "pos": [500, 510], "size": [160, 60] },
+    { "id": "dashboard", "type": "frontend", "label": "Streamlit Dashboard", "sublabel": "dashboard.py · 8 tabs", "pos": [760, 150], "size": [160, 60] },
+    { "id": "bot", "type": "backend", "label": "Telegram Bot", "sublabel": "bot.py · commands", "pos": [760, 360], "size": [160, 60] },
+    { "id": "user", "type": "external", "label": "User", "sublabel": "browser + Telegram", "pos": [1010, 260], "size": [130, 60] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "VPS: systemd services", "wraps": ["sync", "postgres", "anomaly_detector", "ai_coach", "dashboard", "bot"] }
+  ],
+  "connections": [
+    { "id": "garmin-to-sync", "from": "garmin_api", "to": "sync", "label": "OAuth session, REST", "labelDy": -24 },
+    { "id": "sync-to-postgres", "from": "sync", "to": "postgres", "label": "UPSERT daily_metrics, spo2_epochs, activities", "variant": "emphasis", "labelDy": -34 },
+    { "id": "postgres-to-dashboard", "from": "postgres", "to": "dashboard", "label": "SELECT via db.py" },
+    { "id": "postgres-to-bot", "from": "postgres", "to": "bot", "label": "SELECT / INSERT via db.py" },
+    { "id": "dashboard-to-user", "from": "dashboard", "to": "user", "label": "HTTPS :8093", "toSide": "left" },
+    { "id": "bot-to-user", "from": "bot", "to": "user", "label": "Telegram Bot API" },
+    { "id": "postgres-to-anomaly", "from": "postgres", "to": "anomaly_detector", "label": "scan daily_metrics" },
+    { "id": "anomaly-to-user", "from": "anomaly_detector", "to": "user", "label": "push alert", "variant": "dashed", "toSide": "top" },
+    { "id": "postgres-to-aicoach", "from": "postgres", "to": "ai_coach", "label": "7-day rolling window", "labelDy": 24, "labelDx": 60 },
+    { "id": "aicoach-to-llm", "from": "ai_coach", "to": "llm_api", "label": "chat completion", "variant": "dashed", "labelDy": 24 },
+    { "id": "aicoach-to-postgres", "from": "ai_coach", "to": "postgres", "label": "save ai_summary / action_plans", "variant": "dashed", "labelAt": [340, 446] }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Ingestion", "items": ["Garmin Connect pulled every 3h via a systemd timer (garmin-sync.timer)", "sync.py upserts 9 Postgres tables: daily_metrics, spo2_epochs, garmin_activities, and more"] },
+    { "dot": "emerald", "title": "Surfaces", "items": ["Streamlit dashboard: 8 tabs including Trends, Oxygen & Respiration, Recovery Forecast", "Telegram bot: 15+ commands for logging, alerts, sync, and reports"] },
+    { "dot": "violet", "title": "AI Coach", "items": ["Weekly Recap and Action Plan coach types, both grounded in precomputed rolling averages", "Action Plan carries a watch-list across periods via the action_plans table"] }
+  ]
+}
