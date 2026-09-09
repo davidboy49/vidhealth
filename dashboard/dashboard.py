@@ -348,6 +348,10 @@ with cols_header[0]:
             <p style="font-size: 0.875rem; color: var(--muted-foreground); margin: 2px 0 0 0;">
                 Personal biometric tracking & training recommendations &bull; Last synced: {last_sync_str}
             </p>
+            <p style="font-size: 0.75rem; color: var(--muted-foreground); margin: 4px 0 0 0;">
+                Changed the theme in the &#8942; menu? Reload the page &mdash; that menu updates instantly,
+                but this page's own colors only pick it up on the next full load.
+            </p>
         </div>
     """, unsafe_allow_html=True)
 with cols_header[1]:
