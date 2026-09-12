@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
 from pathlib import Path
@@ -33,6 +34,39 @@ st.set_page_config(page_title="My Health", page_icon="⚡", layout="wide")
 # default plus a button) is the only way to guarantee this page never
 # disagrees with what native widgets are already showing.
 st.session_state.theme = st.context.theme.type or "dark"
+
+# Auto-reload when the viewer picks a different theme from Streamlit's own
+# menu. That menu writes the choice to localStorage and re-themes native
+# widgets instantly, client-side — but this page's own CSS above was
+# generated server-side from st.context.theme.type, which only reflects the
+# theme as of this connection and won't update on further script reruns
+# within the same session, only a fresh page load. Rather than ask viewers to
+# remember to reload by hand, poll for that localStorage value changing and
+# reload for them the moment it disagrees with what this run rendered.
+# st.components.v1.html runs in a same-origin iframe (unlike st.markdown,
+# which strips <script> tags), so it can read the parent page's localStorage
+# and trigger a real reload via window.parent.
+components.html(f"""
+<script>
+(function() {{
+    const SERVER_THEME = "{st.session_state.theme}";
+    function resolveActiveTheme() {{
+        let raw = null;
+        try {{ raw = JSON.parse(window.parent.localStorage.getItem('stActiveTheme-/-v2') || 'null'); }} catch (e) {{}}
+        if (raw === 'Dark') return 'dark';
+        if (raw === 'Light') return 'light';
+        // Unset or 'System' -> follow the OS/browser preference, same as Streamlit itself does.
+        return window.parent.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }}
+    const interval = setInterval(function() {{
+        if (resolveActiveTheme() !== SERVER_THEME) {{
+            clearInterval(interval);
+            window.parent.location.reload();
+        }}
+    }}, 700);
+}})();
+</script>
+""", height=0)
 
 # Apply CSS variables matching Shadcn UI design tokens
 if st.session_state.theme == "dark":
@@ -347,10 +381,6 @@ with cols_header[0]:
             <h1 style="font-size: 2rem; font-weight: 800; letter-spacing: -0.05em; margin: 0;">My Health</h1>
             <p style="font-size: 0.875rem; color: var(--muted-foreground); margin: 2px 0 0 0;">
                 Personal biometric tracking & training recommendations &bull; Last synced: {last_sync_str}
-            </p>
-            <p style="font-size: 0.75rem; color: var(--muted-foreground); margin: 4px 0 0 0;">
-                Changed the theme in the &#8942; menu? Reload the page &mdash; that menu updates instantly,
-                but this page's own colors only pick it up on the next full load.
             </p>
         </div>
     """, unsafe_allow_html=True)
