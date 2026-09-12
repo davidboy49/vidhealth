@@ -31,3 +31,7 @@
 | 2026-09-04 (baseline) | **5** | yes | day 1 of course |
 | 2026-09-07 | **7** | ? | (logged retroactively Sep 8) |
 | 2026-09-08 | **7** | ? | |
+| 2026-09-09–11 | — | ? | no scores logged; Sep 11 follow-up NOT attended |
+
+**Status 2026-09-11:** scheduled follow-up with Prof. Khun Kheang was not attended. Med adherence unconfirmed since Sep 7. Action: RESCHEDULE + resume daily breathing scores.
+**Clean streak (no master):** 12 days as of 2026-09-11 (last logged Aug 30) — longest in dataset.
