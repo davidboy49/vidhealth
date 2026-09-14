@@ -515,15 +515,17 @@ def save_body_comp(date_str: str, weight: float, body_fat: float, waist: float):
     conn.commit()
     conn.close()
 
-def get_body_comp_df(limit: int = 30):
+def get_body_comp_df(limit: int | None = 30):
     """
     Loads body composition metrics as a pandas DataFrame.
+    Pass limit=None to fetch every row (used by the Data tab's full export).
     """
     init_db()
+    clause = "" if limit is None else f"LIMIT {int(limit)}"
     df = _read_sql(f"""
         SELECT * FROM body_comp 
         ORDER BY date ASC 
-        LIMIT {limit}
+        {clause}
     """)
     return df
 
@@ -576,15 +578,17 @@ def get_activity_logs(date_str: str | None = None, limit: int = 50):
         LIMIT %s
     """, (limit,))
 
-def get_activity_logs_df(limit: int = 100):
+def get_activity_logs_df(limit: int | None = 100):
     """
     Fetches activity logs as a pandas DataFrame.
+    Pass limit=None to fetch every row (used by the Data tab's full export).
     """
     init_db()
+    clause = "" if limit is None else f"LIMIT {int(limit)}"
     df = _read_sql(f"""
         SELECT * FROM activity_logs 
         ORDER BY date ASC, timestamp ASC
-        LIMIT {limit}
+        {clause}
     """)
     return df
 
@@ -631,22 +635,44 @@ def save_anomaly_alert(date_str: str, severity: str, alert_type: str, message: s
     conn.close()
     return row_id
 
-def get_recent_alerts(limit: int = 20, unacknowledged_only: bool = False):
+def get_recent_alerts(limit: int | None = 20, unacknowledged_only: bool = False):
     """
     Fetches recent anomaly alerts.
+    Pass limit=None to fetch every alert (used by the Data tab's full export).
     """
+    if limit is None:
+        clause = ""
+        params: tuple = ()
+    else:
+        clause = "LIMIT %s"
+        params = (int(limit),)
     if unacknowledged_only:
-        return _fetch_dicts("""
+        return _fetch_dicts(f"""
             SELECT * FROM anomaly_alerts
             WHERE acknowledged = 0
             ORDER BY timestamp DESC, id DESC
-            LIMIT %s
-        """, (limit,))
-    return _fetch_dicts("""
+            {clause}
+        """, params)
+    return _fetch_dicts(f"""
         SELECT * FROM anomaly_alerts
         ORDER BY timestamp DESC, id DESC
-        LIMIT %s
-    """, (limit,))
+        {clause}
+    """, params)
+
+
+def get_all_alerts_df(limit: int | None = None):
+    """
+    Fetches anomaly alerts as a pandas DataFrame (newest first).
+    Pass limit=None (the default) to fetch every alert.
+    """
+    init_db()
+    clause = "" if limit is None else f"LIMIT {int(limit)}"
+    df = _read_sql(f"""
+        SELECT * FROM anomaly_alerts
+        ORDER BY date ASC, timestamp ASC
+        {clause}
+    """)
+    return df
 
 def acknowledge_alert(alert_id: int) -> bool:
     """Marks an alert as acknowledged."""
@@ -1132,6 +1158,35 @@ def save_action_plan(
             RETURNING id
             """, (period_start, period_end, now_iso, model, headline, plan_text, watchlist_json))
             return cursor.fetchone()[0]
+
+
+def get_spo2_epochs_all_df():
+    """
+    Returns every raw SpO2 epoch (the ~15s-resolution samples) as a DataFrame,
+    oldest first. Used by the Data tab's full export — the raw table is far too
+    large for the interactive table views, which aggregate per hour/day.
+    """
+    init_db()
+    df = _read_sql("""
+        SELECT * FROM spo2_epochs
+        ORDER BY date ASC, timestamp ASC, id ASC
+    """)
+    return df
+
+
+def get_action_plans_df(limit: int | None = None):
+    """
+    Returns saved AI action plans as a DataFrame, oldest first.
+    Pass limit=None (the default) to fetch every plan.
+    """
+    init_db()
+    clause = "" if limit is None else f"LIMIT {int(limit)}"
+    df = _read_sql(f"""
+        SELECT * FROM action_plans
+        ORDER BY generated_at ASC, id ASC
+        {clause}
+    """)
+    return df
 
 
 def get_latest_action_plan() -> dict | None:

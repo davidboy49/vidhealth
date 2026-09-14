@@ -2,6 +2,8 @@ import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
+import io
+import zipfile
 from pathlib import Path
 from datetime import datetime, date, timedelta
 import plotly.graph_objects as go
@@ -2777,9 +2779,102 @@ with tab_ent:
 
 
 # ==================== TAB 6: RECORDED DATA EXPLORER ====================
+# ---------------------------------------------------------
+# FULL-DATABASE EXPORT (used by the Data tab)
+# ---------------------------------------------------------
+# Every table in the database, paired with the CSV filename it gets inside the
+# exported ZIP. Keeping this as a plain list means a table added to db.py only
+# needs one line here to appear in the bulk export.
+ALL_DATASET_EXPORTS = [
+    ("daily_metrics", "One row per day: HRV, sleep, RHR, stress, steps, SpO2 summary", lambda: db.get_df(limit=None)),
+    ("garmin_activities", "Workouts and runs synced from Garmin", lambda: db.get_activities_df(days=None)),
+    ("spo2_drop_events", "Individual desaturation events (the 3-5am dips)", lambda: db.get_all_spo2_events_df(days=None)),
+    ("hourly_spo2", "SpO2 aggregated per hour + drops below 90/85", lambda: db.get_multi_day_hourly_spo2_df(days=None)),
+    ("spo2_epochs", "Raw ~15s SpO2 samples (large — this is why raw != daily)", lambda: db.get_spo2_epochs_all_df()),
+    ("activity_logs", "Journal / habits / alcohol entries (append-only)", lambda: db.get_activity_logs_df(limit=None)),
+    ("anomaly_alerts", "Auto-flagged biometric outliers", lambda: db.get_all_alerts_df()),
+    ("body_comp", "Weight / body fat / waist readings", lambda: db.get_body_comp_df(limit=None)),
+    ("action_plans", "Saved AI-coach action plans", lambda: db.get_action_plans_df()),
+]
+
+
+def build_full_export_zip():
+    """
+    Reads every table and returns (zip_bytes, manifest) where manifest is a list
+    of (table_name, row_count, description). Built on demand rather than on every
+    page rerun — spo2_epochs alone is ~33k rows.
+    """
+    buffer = io.BytesIO()
+    manifest = []
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as bundle:
+        for table_name, description, load in ALL_DATASET_EXPORTS:
+            frame = load()
+            bundle.writestr(f"{table_name}.csv", frame.to_csv(index=False))
+            manifest.append((table_name, len(frame), description))
+        header = (
+            "vidhealth full export\n"
+            f"generated: {datetime.now():%Y-%m-%d %H:%M}\n"
+            "source: Postgres 'health' database — every table, no filters\n\n"
+            f"{'table':<20}{'rows':>7}  description\n"
+        )
+        lines = [f"{t:<20}{n:>7}  {d}" for t, n, d in manifest]
+        bundle.writestr("README.txt", header + "\n".join(lines) + "\n")
+    return buffer.getvalue(), manifest
+
+
 with tab_data:
     st.markdown(f"<h3 style='font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 6px; display: flex; align-items: center;'>{LUCIDE_DATABASE} Recorded Data Explorer</h3>", unsafe_allow_html=True)
     st.markdown("<p style='font-size: 0.875rem; color: var(--muted-foreground); margin: 0 0 18px 0;'>Search, inspect, analyze, and export records across all biometric tables in your database.</p>", unsafe_allow_html=True)
+
+    # ---- Bulk export: every table in one ZIP -------------------------------
+    with st.expander("📦 Export ALL data — every table in one ZIP", expanded=False):
+        st.markdown(
+            "<p style='font-size: 0.875rem; color: var(--muted-foreground); margin: 0 0 12px 0;'>"
+            "One ZIP containing a CSV for every table in the database — daily metrics, activities, "
+            "SpO2 (raw epochs, hourly and drop events), journal/habit logs, anomaly alerts, body "
+            "composition, and saved action plans. Nothing filtered, nothing trimmed. A README.txt "
+            "inside lists the row count per table.</p>",
+            unsafe_allow_html=True,
+        )
+        prep_col, dl_col = st.columns([2, 3])
+        with prep_col:
+            if st.button("Prepare full export", key="prepare_full_export", use_container_width=True):
+                with st.spinner("Reading every table…"):
+                    export_bytes, export_manifest = build_full_export_zip()
+                st.session_state["full_export_bytes"] = export_bytes
+                st.session_state["full_export_manifest"] = export_manifest
+        with dl_col:
+            prepared_bytes = st.session_state.get("full_export_bytes")
+            if prepared_bytes:
+                st.download_button(
+                    label=f"📥 Download vidhealth_full_export_{date.today().isoformat()}.zip",
+                    data=prepared_bytes,
+                    file_name=f"vidhealth_full_export_{date.today().isoformat()}.zip",
+                    mime="application/zip",
+                    use_container_width=True,
+                    key="download_full_export_zip",
+                )
+            else:
+                st.markdown(
+                    "<p style='font-size: 0.8125rem; color: var(--muted-foreground); margin: 8px 0 0 0;'>"
+                    "The ZIP is built on demand so normal browsing stays fast — click "
+                    "“Prepare full export” first.</p>",
+                    unsafe_allow_html=True,
+                )
+
+        prepared_manifest = st.session_state.get("full_export_manifest")
+        if prepared_manifest:
+            manifest_df = pd.DataFrame(prepared_manifest, columns=["Table", "Rows", "Contents"])
+            total_rows = int(manifest_df["Rows"].sum())
+            st.markdown(
+                f"<p style='font-size: 0.8125rem; color: var(--muted-foreground); margin: 12px 0 6px 0;'>"
+                f"{len(manifest_df)} tables · {total_rows:,} rows · "
+                f"{len(prepared_bytes) / 1024:.0f} KB compressed</p>",
+                unsafe_allow_html=True,
+            )
+            st.dataframe(manifest_df, use_container_width=True, hide_index=True)
+
+    st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
     # Multi-Dataset Selector
     dataset_col, spacer_col = st.columns([4, 6])
@@ -3144,6 +3239,17 @@ with tab_data:
                         else:
                             st.error(f"No entry found with ID #{del_id}")
 
+                # Export every log (not just the 500 shown above) — journal, habits, alcohol.
+                st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
+                st.download_button(
+                    label="📥 Export all logs CSV",
+                    data=db.get_activity_logs_df(limit=None).to_csv(index=False).encode("utf-8"),
+                    file_name=f"vidhealth_activity_logs_{date.today().isoformat()}.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                    key="download_activity_logs_csv",
+                )
+
     # ---------------------------------------------------------
     # DATASET 5: HEALTH ANOMALY ALERTS
     # ---------------------------------------------------------
@@ -3153,6 +3259,14 @@ with tab_data:
             st.info("No historical anomaly alerts recorded.")
         else:
             alerts_df = pd.DataFrame(alerts_list)
+            # Full history, not just the 200 rows rendered above.
+            st.download_button(
+                label="📥 Export all alerts CSV",
+                data=db.get_all_alerts_df().to_csv(index=False).encode("utf-8"),
+                file_name=f"vidhealth_anomaly_alerts_{date.today().isoformat()}.csv",
+                mime="text/csv",
+                key="download_anomaly_alerts_csv",
+            )
             st.dataframe(
                 alerts_df[["id", "date", "timestamp", "severity", "alert_type", "message"]].rename(columns={
                     "id": "ID", "date": "Date", "timestamp": "Logged At",
@@ -3171,6 +3285,14 @@ with tab_data:
         if body_df.empty:
             st.info("No body composition entries logged yet. Add entries in the Body Composition tab.")
         else:
+            # Full history, not just the most recent 365 readings.
+            st.download_button(
+                label="📥 Export body composition CSV",
+                data=db.get_body_comp_df(limit=None).to_csv(index=False).encode("utf-8"),
+                file_name=f"vidhealth_body_comp_{date.today().isoformat()}.csv",
+                mime="text/csv",
+                key="download_body_comp_csv",
+            )
             st.dataframe(
                 body_df.rename(columns={
                     "date": "Date", "weight": "Weight (kg)",
