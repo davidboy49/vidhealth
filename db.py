@@ -478,6 +478,65 @@ def get_df(limit: int | None = 30):
     df = _read_sql(query, params=params)
     return df
 
+
+# Sleep target = David's own rule (lights out 22:00 -> 05:00 wake) = a 7h night.
+SLEEP_TARGET_SECONDS = 7 * 3600
+SLEEP_DEBT_WINDOW = 14          # nights summed into the rolling deficit
+_SUB4H_SECONDS = 4 * 3600       # a "disaster night" threshold
+
+
+def get_sleep_debt_df(window: int = SLEEP_DEBT_WINDOW,
+                      target_seconds: int = SLEEP_TARGET_SECONDS,
+                      limit: int | None = 60):
+    """
+    Rolling sleep debt: one row per night that has a sleep record.
+
+    Each night contributes (target - slept); a window function sums the last
+    `window` recorded nights, so the *direction* is visible (falling = repaying,
+    rising = digging), not just the current size. Nights with no sleep record are
+    skipped by the frame rather than counted as zero-hours sleep — a missing
+    night is an absent measurement, not a sleepless one.
+
+    Columns: date, sleep_duration, nights (nights in the frame), slept_seconds,
+    debt_seconds (positive = behind), avg_seconds, sub4h (disaster nights in the
+    frame), plus debt_hours / avg_hours.
+
+    Early rows span fewer than `window` nights (the frame ramps up) — callers
+    that plot the series should filter on `nights >= window` to avoid a
+    misleading ramp. Frame bounds are inlined as validated ints: a placeholder
+    inside `ROWS BETWEEN` breaks psycopg2's server-side prepared statements.
+    """
+    init_db()
+    window = max(1, int(window))
+    target_seconds = int(target_seconds)
+    query = f"""
+        WITH nights AS (
+            SELECT date, sleep_duration
+            FROM daily_metrics
+            WHERE sleep_duration IS NOT NULL
+        )
+        SELECT
+            date,
+            sleep_duration,
+            COUNT(*) OVER w AS nights,
+            SUM(sleep_duration) OVER w AS slept_seconds,
+            COUNT(*) OVER w * {target_seconds} - SUM(sleep_duration) OVER w AS debt_seconds,
+            AVG(sleep_duration) OVER w AS avg_seconds,
+            SUM(CASE WHEN sleep_duration < {_SUB4H_SECONDS} THEN 1 ELSE 0 END) OVER w AS sub4h
+        FROM nights
+        WINDOW w AS (ORDER BY date ROWS BETWEEN {window - 1} PRECEDING AND CURRENT ROW)
+        ORDER BY date ASC
+    """
+    df = _read_sql(query)
+    if df is None or df.empty:
+        return df
+    df["debt_hours"] = df["debt_seconds"] / 3600.0
+    df["avg_hours"] = df["avg_seconds"] / 3600.0
+    if limit is not None:
+        df = df.tail(int(limit)).reset_index(drop=True)
+    return df
+
+
 def update_custom_field(date_str: str, field_name: str, value):
     """
     Updates custom fields like workout_type, alcohol_logged, sleep_apnea_flag, etc.

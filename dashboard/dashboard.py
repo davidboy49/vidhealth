@@ -657,6 +657,47 @@ with tab_today:
 
     st.markdown("<div style='margin-bottom: 24px;'></div>", unsafe_allow_html=True)
 
+    # ---- Sleep Debt: rolling 14-night deficit ------------------------------
+    # Deliberately not one of the five tiles above: those are last-night
+    # readings (one number, one day), this is cumulative — the point is the
+    # direction. Falls when you repay it, climbs when you dig.
+    try:
+        _debt_df = db.get_sleep_debt_df()
+    except Exception as _debt_err:
+        _debt_df = None
+        st.caption(f"Sleep debt unavailable: {_debt_err}")
+    if _debt_df is not None and not _debt_df.empty:
+        _d = _debt_df.iloc[-1]
+        _debt_h = float(_d["debt_hours"])
+        _debt_nights = int(_d["nights"])
+        _debt_avg = float(_d["avg_hours"])
+        _debt_sub4 = int(_d["sub4h"])
+        _target_h = db.SLEEP_TARGET_SECONDS / 3600.0
+        if _debt_h >= 8:
+            _debt_color, _debt_qual = STATUS_CRITICAL, "chronic restriction — pay this down before optimising anything else"
+        elif _debt_h >= 4:
+            _debt_color, _debt_qual = STATUS_WARNING, "running behind — buy it back with earlier nights, not later mornings"
+        else:
+            _debt_color, _debt_qual = STATUS_GOOD, "paid up — hold the line"
+        _debt_val = f"{_debt_h:.1f}h behind" if _debt_h >= 0 else f"{abs(_debt_h):.1f}h ahead"
+        st.markdown(f"""
+        <div style="background-color: var(--card); border: 1px solid var(--border); border-left: 4px solid {_debt_color}; border-radius: 8px; padding: 18px; margin-bottom: 6px; box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);">
+            <div style="font-size: 0.75rem; color: var(--muted-foreground); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">Sleep Debt · rolling {_debt_nights} nights</div>
+            <div style="display: flex; align-items: baseline; gap: 12px; margin-top: 4px; flex-wrap: wrap;">
+                <span style="font-size: 2.25rem; font-weight: 800; letter-spacing: -0.05em; color: var(--card-foreground);">{_debt_val}</span>
+                <span style="font-size: 0.875rem; font-weight: 500; color: var(--muted-foreground);">• avg {_debt_avg:.1f}h/night vs {_target_h:.0f}h target • {_debt_sub4} night(s) under 4h</span>
+            </div>
+            <div style="font-size: 0.8125rem; font-weight: 600; color: {_debt_color}; margin-top: 6px;">{_debt_qual}</div>
+        </div>
+        """, unsafe_allow_html=True)
+        _debt_full = _debt_df[_debt_df["nights"] >= min(7, _debt_nights)]
+        if len(_debt_full) > 1:
+            st.plotly_chart(
+                make_sparkline(_debt_full["debt_hours"].tolist(), _debt_color, dates=_debt_full["date"].tolist()),
+                config={'displayModeBar': False}, use_container_width=True)
+            st.caption("Rolling 14-night debt — falling = repaying, rising = digging")
+        st.markdown("<div style='margin-bottom: 24px;'></div>", unsafe_allow_html=True)
+
     # Dynamic Workout split suggestions & Coach's Verdict
     col_gym, col_coach = st.columns([6, 4])
     
@@ -959,7 +1000,7 @@ with tab_trends:
         hrv_delta = latest_hrv - latest_hrv_base if latest_hrv is not None and latest_hrv_base is not None else None
         avg_sleep_hours = metric_mean(trend_df, "sleep_duration")
         avg_sleep_hours = avg_sleep_hours / 3600 if avg_sleep_hours is not None else None
-        sleep_debt = max(0, 7 - avg_sleep_hours) if avg_sleep_hours is not None else None
+        sleep_debt = max(0, db.SLEEP_TARGET_SECONDS / 3600.0 - avg_sleep_hours) if avg_sleep_hours is not None else None
         avg_rhr = metric_mean(trend_df, "resting_hr")
 
         st.markdown("""
@@ -988,7 +1029,7 @@ with tab_trends:
         <div class="trend-card-row">
             <div class="trend-mini-card"><div class="trend-mini-label">Recovery Index</div><div class="trend-mini-value">{fmt_value(recovery_index, '/100')}</div><div class="trend-mini-sub">latest blended recovery signal</div></div>
             <div class="trend-mini-card"><div class="trend-mini-label">HRV Delta</div><div class="trend-mini-value">{hrv_delta_label}</div><div class="trend-mini-sub">{hrv_delta_sub}</div></div>
-            <div class="trend-mini-card"><div class="trend-mini-label">Sleep Debt</div><div class="trend-mini-value">{sleep_debt_label}</div><div class="trend-mini-sub">avg shortfall from 7h target</div></div>
+            <div class="trend-mini-card"><div class="trend-mini-label">Sleep Shortfall</div><div class="trend-mini-value">{sleep_debt_label}</div><div class="trend-mini-sub">avg shortfall PER NIGHT vs 7h target — cumulative debt is on the front page</div></div>
             <div class="trend-mini-card"><div class="trend-mini-label">Avg Resting HR</div><div class="trend-mini-value">{rhr_label}</div><div class="trend-mini-sub">selected range average</div></div>
         </div>
         """, unsafe_allow_html=True)
